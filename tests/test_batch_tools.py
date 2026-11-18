@@ -1,4 +1,5 @@
 from datetime import datetime
+from io import BytesIO
 from pathlib import Path
 from shutil import copyfile
 from tempfile import TemporaryDirectory
@@ -28,7 +29,7 @@ class TestVersion110(unittest.TestCase):
             root = Path(directory)
             dodgy = root / "1_Sales Data.xlsm"
             submission(dodgy)
-            book = load_workbook(dodgy)
+            book = load_workbook(BytesIO(dodgy.read_bytes()))
             detail = book["Detail"]
             detail["K2"].number_format = "0.00E+00"
             detail["Q2"].number_format = "0.00"
@@ -54,7 +55,7 @@ class TestVersion110(unittest.TestCase):
             right = root / "2_Sales Data.xlsx"
             subset = root / "3_Subset.xlsx"
             submission(left)
-            book = load_workbook(left)
+            book = load_workbook(BytesIO(left.read_bytes()))
             detail = book["Detail"]
             for row in range(3, 13):
                 for col in range(1, 18):
@@ -69,7 +70,7 @@ class TestVersion110(unittest.TestCase):
             book.close()
             flags, errors = compare_workbooks([left, right, subset])
             self.assertFalse(errors)
-            identical, copied = flags[str(left)]
+            identical, copied = flags[str(left.resolve())]
             self.assertTrue(identical["identical_file"])
             self.assertEqual(identical["matching_rows"], 11)
             self.assertEqual(copied["peer_overlap"], 100)

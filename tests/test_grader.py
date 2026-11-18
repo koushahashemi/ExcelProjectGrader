@@ -1,4 +1,5 @@
 import json
+from io import BytesIO
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
@@ -75,7 +76,7 @@ class TestGrader(unittest.TestCase):
         with TemporaryDirectory() as root:
             path = Path(root, "Sales Data Full Charts.xlsx")
             submission(path)
-            book = load_workbook(path)
+            book = load_workbook(BytesIO(path.read_bytes()))
             line_sheet = book["Line Chart"]
             line_sheet.append(["Year", "Online"])
             line_sheet.append([2025, 1])
@@ -122,7 +123,7 @@ class TestGrader(unittest.TestCase):
             for index in (16, 18, 19, 22, 23):
                 self.assertEqual(outcome["items"][index]["score"], 2, outcome["items"][index])
 
-            book = load_workbook(path)
+            book = load_workbook(BytesIO(path.read_bytes()))
             bar_sheet = book["Bar Chart"]
             for row, data in enumerate((["Region", "Total Revenue", "Total Cost", "Total Profit"],
                                         ["Asia", 250, 50, 200]), 10):
