@@ -11,8 +11,11 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 from tkinter.scrolledtext import ScrolledText
 
+from batch_tools import compare_workbooks, trim_filenames, workbook_file
 from grader import COURSE, MAXIMUM, RUBRIC, TITLE, VERSION, grade
-from reports import benchmark, details, export_report, feedback, score_rows
+from reports import benchmark, details, export_report, feedback, flag_labels, item_feedback, score_rows
+
+EXCEL_FILES = [("Excel workbooks", ("*.xlsx", "*.xlsm"))]
 
 
 class App:
@@ -22,6 +25,8 @@ class App:
         self.results = []
         self.pending = set()
         self.remaining = 0
+        self.comparing = False
+        self.comparison_output = queue.Queue()
         root.title(f"{TITLE} {VERSION} · {COURSE}")
         root.geometry("1240x790")
         root.minsize(880, 580)
@@ -50,16 +55,24 @@ class App:
         report["menu"] = menu
         report.pack(side="right")
 
+        utilities = ttk.Frame(frame)
+        utilities.pack(fill="x", pady=(5, 0))
+        self.compare_button = ttk.Button(utilities, text="Check for similar submissions…", command=self.compare)
+        self.compare_button.pack(side="left")
+        self.rename_button = ttk.Button(utilities, text="Trim filenames…", command=self.rename_dialog)
+        self.rename_button.pack(side="left", padx=5)
+
         self.progress = ttk.Progressbar(frame, mode="indeterminate")
         self.progress.pack(fill="x", pady=(10, 5))
-        self.status = tk.StringVar(value="Drop .xlsx submissions here, or select Add Excel files. Double-click a filename to open it.")
+        self.status = tk.StringVar(value="Drop .xlsx or .xlsm submissions here, or select Add Excel files. Double-click a filename to open it.")
         ttk.Label(frame, textvariable=self.status).pack(anchor="w", pady=(0, 8))
         panes = ttk.Panedwindow(frame, orient="vertical")
         panes.pack(fill="both", expand=True)
         upper = ttk.Frame(panes)
         panes.add(upper, weight=2)
-        self.batch = self.table(upper, ["Submission", f"Total /{MAXIMUM}", "Status", *[f"{name} /{points}" for name, points in RUBRIC]],
-                                [240, 85, 130, *[145] * len(RUBRIC)])
+        self.batch = self.table(upper, ["Submission", f"Total /{MAXIMUM}", "Status", "Instructor flags", *[f"{name} /{points}" for name, points in RUBRIC]],
+                                [240, 85, 130, 210, *[145] * len(RUBRIC)])
+        self.batch.tag_configure("flag", background="#fff0b3", foreground="#673500")
         self.batch.bind("<<TreeviewSelect>>", self.select_submission)
         self.batch.bind("<Double-1>", self.open_workbook)
         self.batch.bind("<Return>", self.open_workbook)
@@ -73,10 +86,11 @@ class App:
         review.add(criteria, weight=1)
         self.rubric = self.table(criteria, ["Rubric item", "Score", "Review"], [190, 60, 60])
         self.rubric.bind("<<TreeviewSelect>>", self.select_criterion)
-        views = ttk.Notebook(review)
+        views = self.views = ttk.Notebook(review)
         review.add(views, weight=2)
         self.feedback = ScrolledText(views, wrap="word", padx=10, pady=8, state="disabled")
         self.details = ScrolledText(views, wrap="word", padx=10, pady=8, state="disabled")
+        self.feedback.tag_configure("focused", background="#fff0b3")
         views.add(self.feedback, text="Feedback")
         views.add(self.details, text="Technical details")
         self.register_drop(root, drop_type)
@@ -108,7 +122,7 @@ class App:
         return tree
 
     def choose(self):
-        self.add(filedialog.askopenfilenames(filetypes=[("Excel workbook", "*.xlsx")], title="Select submissions"))
+        self.add(filedialog.askopenfilenames(filetypes=EXCEL_FILES, title="Select submissions"))
 
     def folder(self):
         directory = filedialog.askdirectory(title="Select a folder of submissions")
@@ -125,13 +139,15 @@ class App:
         return "copy"
 
     def add(self, paths):
+        if self.comparing:
+            self.status.set("Wait for the submission comparison to finish before adding files.")
+            return
         candidates = dict.fromkeys(Path(value).resolve() for value in paths)
-        workbooks = [path for path in candidates if path.is_file() and path.suffix.lower() == ".xlsx"
-                     and not path.name.startswith("~$") and path not in self.pending
+        workbooks = [path for path in candidates if workbook_file(path) and path not in self.pending
                      and str(path) not in {result["source_path"] for result in self.results}]
         if not workbooks:
             if candidates:
-                self.status.set("No new .xlsx submissions found.")
+                self.status.set("No new .xlsx or .xlsm submissions found.")
             return
         if not self.remaining:
             self.progress.start()
@@ -156,7 +172,7 @@ class App:
                 self.pending.discard(Path(result["source_path"]))
                 self.remaining -= 1
                 self.batch.insert("", "end", iid=str(index), values=next(score_rows([result])),
-                                  tags=("deduction",) if "error" in result else ())
+                                  tags=self.result_tags(result))
                 if not self.batch.selection():
                     self.batch.selection_set(str(index))
                 if self.remaining:
@@ -168,7 +184,114 @@ class App:
                     self.status.set(f"Batch complete · {len(self.results)-errors} graded · {errors} errors")
         except queue.Empty:
             pass
+        self.poll_comparison()
         self.root.after(75, self.poll)
+
+    @staticmethod
+    def result_tags(result):
+        if flag_labels(result):
+            return ("flag",)
+        return ("deduction",) if "error" in result else ()
+
+    def refresh_rows(self):
+        for index, result in enumerate(self.results):
+            self.batch.item(str(index), values=next(score_rows([result])), tags=self.result_tags(result))
+        self.select_submission()
+
+    def compare(self):
+        if self.remaining or self.comparing:
+            self.status.set("Wait for the current batch operation to finish.")
+            return
+        if len(self.results) < 2:
+            messagebox.showinfo("Compare submissions", "Add at least two workbooks to compare.")
+            return
+        paths = [result["source_path"] for result in self.results]
+        self.comparing = True
+        for button in (self.clear_button, self.compare_button, self.rename_button):
+            button.configure(state="disabled")
+        self.progress.start()
+        self.status.set(f"Comparing {len(paths)} workbooks…")
+        output = self.comparison_output
+
+        def worker():
+            try:
+                output.put((compare_workbooks(paths), None))
+            except Exception as error:
+                output.put((None, str(error)))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def poll_comparison(self):
+        try:
+            comparison, failure = self.comparison_output.get_nowait()
+        except queue.Empty:
+            return
+        self.comparing = False
+        for button in (self.clear_button, self.compare_button, self.rename_button):
+            button.configure(state="normal")
+        self.progress.stop()
+        if failure:
+            self.status.set("Comparison could not be completed.")
+            messagebox.showerror("Comparison failed", failure)
+            return
+        flags, errors = comparison
+        for result in self.results:
+            path = result["source_path"]
+            result["similarity"] = flags[path]
+            result.pop("comparison_error", None)
+            if path in errors:
+                result["comparison_error"] = errors[path]
+        self.refresh_rows()
+        similarity_count = sum(bool(matches) for matches in flags.values())
+        self.status.set(f"Comparison complete · {similarity_count} workbooks with shared signals · {len(errors)} errors")
+
+    def rename_dialog(self):
+        if self.remaining or self.comparing:
+            self.status.set("Wait for the current batch operation to finish.")
+            return
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Trim Excel filenames")
+        dialog.transient(self.root)
+        panel = ttk.Frame(dialog, padding=16)
+        panel.pack(fill="both", expand=True)
+        ttk.Label(panel, text="Remove the prefix through the first underscore from .xlsx and .xlsm filenames.",
+                  wraplength=470).pack(anchor="w")
+        output = ScrolledText(panel, width=66, height=12, wrap="word", state="disabled")
+        output.pack(fill="both", expand=True, pady=(10, 0), side="bottom")
+        buttons = ttk.Frame(panel)
+        buttons.pack(fill="x", pady=(8, 0))
+
+        def apply(paths):
+            paths = [path for path in paths if workbook_file(Path(path))]
+            if not paths:
+                return
+            if not messagebox.askyesno("Rename workbooks", f"Apply filename trimming to {len(paths)} workbook(s)?",
+                                       parent=dialog):
+                return
+            renamed, skipped = trim_filenames(paths)
+            if renamed:
+                for result in self.results:
+                    old = result["source_path"]
+                    if old in renamed:
+                        result["source_path"] = renamed[old]
+                        result["filename"] = Path(renamed[old]).name
+                    for match in result.get("similarity", []):
+                        match["peer"] = renamed.get(match["peer"], match["peer"])
+                self.refresh_rows()
+            lines = [f"Renamed {len(renamed)} · Skipped {len(skipped)}"]
+            lines.extend(f"{Path(before).name} → {Path(after).name}" for before, after in renamed.items())
+            self.show(output, "\n".join(lines + skipped))
+
+        def choose_folder():
+            folder = filedialog.askdirectory(parent=dialog)
+            if folder:
+                apply(sorted(Path(folder).iterdir()))
+
+        ttk.Button(buttons, text="Select files…", command=lambda: apply(
+            filedialog.askopenfilenames(parent=dialog, filetypes=EXCEL_FILES))).pack(side="left")
+        ttk.Button(buttons, text="Select folder…", command=choose_folder).pack(side="left", padx=5)
+        ttk.Button(buttons, text="Close", command=dialog.destroy).pack(side="right")
+        dialog.grab_set()
 
     @staticmethod
     def show(widget, text):
@@ -198,7 +321,18 @@ class App:
         selection = self.rubric.selection()
         result = self.selected()
         if result and selection:
-            self.show(self.details, details(result, int(selection[0])))
+            index = int(selection[0])
+            self.show(self.details, details(result, index))
+            self.feedback.tag_remove("focused", "1.0", "end")
+            item = result["items"][index]
+            if self.views.select() == str(self.feedback) and item["score"] < item["maximum"]:
+                preceding = [item_feedback(other) for other in result["items"][:index]
+                             if other["score"] < other["maximum"]]
+                line = 3 + sum(block.count("\n") + 2 for block in preceding)
+                start = f"{line}.0"
+                end = f"{line + item_feedback(item).count(chr(10))}.end"
+                self.feedback.tag_add("focused", start, end)
+                self.feedback.yview(start)
 
     def open_workbook(self, event):
         if event.keysym != "Return":

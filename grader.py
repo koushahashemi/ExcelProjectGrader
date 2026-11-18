@@ -13,11 +13,12 @@ from openpyxl.utils.cell import range_boundaries, get_column_letter
 from openpyxl.utils.datetime import from_excel
 from openpyxl.styles.numbers import is_date_format
 
-VERSION = "1.0.0"
+VERSION = "1.1.0"
+WORKBOOK_SUFFIXES = {".xlsx", ".xlsm"}
 TITLE = "Excel Project Grader"
 COURSE = "BSYS-1000 · Individual Project (Excel) · Fall 2026"
 SETUP = ("CountryCodes import", "Hide Parameters", "Unique countries", "Adjacent dates")
-FORMAT = ("Column widths", "Data types", "DetailTable")
+FORMAT = ("Column widths", "Data types", "Excel Table Creation")
 FORMULAS = ("Total Revenue", "Total Cost", "Total Profit", "Days to Fulfil", "Order Status", "ISO Codes")
 GROUPS = ("Bar", "Line", "Combo")
 RUBRIC = [(name, 1) for name in SETUP] + [(name, 2) for name in FORMAT + FORMULAS]
@@ -88,17 +89,28 @@ def day(value, epoch):
 
 
 def currency(fmt):
-    return bool(re.search(r'\$|€|£|¥|\bUSD\b|\bCAD\b', fmt, re.I))
+    # A locale-only marker such as [$-409] carries no currency symbol.
+    fmt = re.sub(r"\[\$-.*?\]", "", fmt)
+    return bool(re.search(r"[$€£¥₹₩₽₫₪₱₺₴₦฿¢]|\b(?:USD|CAD|AUD|EUR|GBP|JPY|CHF)\b", fmt, re.I))
 
 
-def format_ok(cell, name):
+def format_ok(cell, name, value=None):
     fmt = cell.number_format
+    code = re.sub(r'"[^"]*"|\\.|\[[^]]*\]', "", fmt)
+    if re.search(r"[0#?]E[+-][0#?]", code, re.I):
+        return False
     if name in MONEY:
-        return currency(fmt)
+        return currency(fmt) and bool(re.search(r"[0#?]", code))
     if name in {"Order Date", "Ship Date"}:
-        return is_date_format(fmt)
-    if name in {"Days to Fulfil", "Units Sold", "Order ID"}:
-        return not currency(fmt) and not is_date_format(fmt) and "%" not in fmt
+        return is_date_format(fmt) and (bool(re.search(r"[dy]", code, re.I)) or ("m" in code.casefold() and not re.search(r"[hs]", code, re.I)))
+    if fmt.casefold() not in {"general", "@"}:
+        return False
+    if fmt.casefold() == "general" and numeric(value) and value != 0:
+        magnitude = abs(value)
+        available = width(cell, cell.parent.sheet_format.defaultColWidth or 8.43)
+        digits = len(str(abs(int(value))))
+        if magnitude >= 1e11 or magnitude < 1e-4 or (digits >= 7 and digits > available + 1):
+            return False  # Likely General-format scientific display.
     return True
 
 
@@ -118,7 +130,13 @@ def dependencies(formula, row, columns):
         token = match[1].strip("@")
         return next((f"{{{name}}}" for name in columns if key(name) == key(token)), match[0])
 
-    formula = re.sub(r"(?:DetailTable)?\[@?\[?([^\[\]]+)\]?\]", structured, formula, flags=re.I)
+    table = r"(?:[A-Z_][\w.]*)?"
+    row_ref = table + r"\[\[#This\s+Row\]\s*,\s*\[([^\[\]]+)\]\]"
+    short_ref = table + r"\[@(?:\[([^\[\]]+)\]|([^\[\]]+))\]"
+    formula = re.sub(row_ref, structured, formula, flags=re.I)
+    formula = re.sub(short_ref, lambda m: next(
+        (f"{{{name}}}" for name in columns if key(name) == key(m[1] or m[2])), m[0]), formula, flags=re.I)
+    formula = re.sub(r"(?<![\w\[\]])\[([^\[\]]+)\](?![\]:])", structured, formula)
     by_column = {get_column_letter(col): name for name, col in columns.items()}
     formula = re.sub(r"(?<![\w}])\$?([A-Z]{1,3})\$?(\d+)(?!\w)",
                      lambda m: f"{{{by_column[m[1].upper()]}}}" if int(m[2]) == row
@@ -152,7 +170,14 @@ def formula_matches(formula, name, row, columns):
         days = ('{DAYSTOFULFIL}>14', '14<{DAYSTOFULFIL}', '{DAYSTOFULFIL}>=15', '15<={DAYSTOFULFIL}')
         return any(re.fullmatch(r'IF\(AND\(' + re.escape(a + "," + b) + r'\),"DELAYED","ONTIME"\)', body)
                    for first in required for second in days for a, b in ((first, second), (second, first)))
-    return bool(re.fullmatch(r"VLOOKUP\(\{COUNTRY\},(?:CODESTABLE(?:\[#(?:ALL|DATA)\])?|(?:'COUNTRYCODES'|COUNTRYCODES)!\$?A\$?\d+:\$?[C-F]\$?\d+),3,(?:FALSE(?:\(\))?|0)\)", body))
+    table_range = r"CODESTABLE(?:\[(?:#ALL|#DATA)?\]|\[\[COUNTRY\]:\[ISOCODES\]\])?"
+    sheet = r"(?:'COUNTRYCODES'|COUNTRYCODES)!"
+    country_range = r"\$?A\$?\d+:\$?A\$?\d+"
+    iso_range = r"\$?C\$?\d+:\$?C\$?\d+"
+    vlookup = rf"VLOOKUP\(\{{COUNTRY\}},(?:{table_range}|{sheet}\$?A\$?\d+:\$?[C-F]\$?\d+),3,(?:FALSE(?:\(\))?|0)\)"
+    xlookup = (rf"XLOOKUP\(\{{COUNTRY\}},(?:CODESTABLE\[COUNTRY\]|{sheet}{country_range}),"
+               rf'(?:CODESTABLE\[ISOCODES\]|{sheet}{iso_range})(?:,(?:[^,()"]|"[^"]*")*(?:,0?(?:,[+-]?[12])?)?)?\)')
+    return bool(re.fullmatch(vlookup + "|" + xlookup, body))
 
 
 def load_pair(path):
@@ -304,7 +329,7 @@ def format_items(detail):
             continue  # Formula formatting is scored in its own item.
         invalid = []
         for cell, value in samples[1:]:
-            valid = value is not None and format_ok(cell, name)
+            valid = value is not None and format_ok(cell, name, value)
             if name in MONEY | {"Units Sold", "Order ID"}:
                 valid = valid and numeric(value)
             if name in {"Order Date", "Ship Date"}:
@@ -323,10 +348,14 @@ def format_items(detail):
                   and bottom - bool(table.totalsRowCount) == max(detail.rows))
     return [
         rubric_item(4, bands(narrow) if detail.rows else 0, sheet.title, "Widths that display data (task 1)",
-                    "; ".join(narrow) or "No narrow columns detected", "Widen the indicated columns.",
+                    "; ".join(narrow) or "No narrow columns detected",
+                    "Widen these columns on " + sheet.title + ": " + "; ".join(narrow) + "." if narrow else
+                    "" if detail.rows else "No transaction rows were available to check column widths.",
                     "Excel rendering depends on fonts and display settings. Widths are estimated from saved column settings."),
         rubric_item(5, bands(mistyped) if detail.rows else 0, sheet.title, "Appropriate dates, numeric types and currency (task 1)",
-                    "; ".join(mistyped) or "No base-column type problems detected", "Correct the indicated value types or number formats."),
+                    "; ".join(mistyped) or "No base-column type problems detected",
+                    "Correct the value types or formats in " + "; ".join(mistyped) + "." if mistyped else
+                    "" if detail.rows else "No transaction rows were available to check data types."),
         rubric_item(6, 2 if proper else 1 if table else 0, sheet.title, "DetailTable covers the transaction data (task 2)",
                     ", ".join(f"{t.name} {t.ref}" for t in tables) or "No Excel table", "Create or correct DetailTable and its data range."),
     ]
@@ -335,7 +364,7 @@ def format_items(detail):
 def formula_items(detail):
     expectations = ["Units Sold × Unit Price", "Units Sold × Unit Cost", "Total Revenue − Total Cost",
                     "Ship Date − Order Date", 'IF with AND: critical (C) and more than 14 days → Delayed, otherwise On time',
-                    "Exact-match VLOOKUP of Country returning the three-character ISO code"]
+                    "Exact-match VLOOKUP or XLOOKUP of Country returning the three-character ISO code"]
     for offset, (name, expected_text) in enumerate(zip(FORMULAS, expectations)):
         good, uncertain, errors, fmt = [], [], [], []
         seen_required = 0
@@ -345,7 +374,7 @@ def formula_items(detail):
             expected = detail.expected(row, name)
             formula = str(cell.value) if cell and cell.data_type == "f" else ""
             required = (name not in {"Order Status", "ISO Codes"} or
-                        bool(re.search(r"\b" + ("IF" if name == "Order Status" else "VLOOKUP") + r"\s*\(", formula, re.I)))
+                        bool(re.search(r"\b" + ("IF" if name == "Order Status" else "(?:VLOOKUP|XLOOKUP)") + r"\s*\(", formula, re.I)))
             if formula and required:
                 seen_required += 1
             matched = formula_matches(formula, name, row, detail.columns)
@@ -355,11 +384,11 @@ def formula_items(detail):
                 good.append(row)
                 if not matched or expected is None:
                     uncertain.append(row)
-                if not format_ok(cell, name):
+                if not format_ok(cell, name, value):
                     fmt.append(row)
             else:
                 errors.append((row, f"{cell.coordinate if cell else 'Missing column'}: {formula or value!s} → {value!s}; expected {expected!s}"))
-                if formula and required and value is None and not matched:
+                if formula and required and (value is None or cache_correct) and not matched:
                     uncertain.append(row)
         position_issue = False
         col = detail.columns.get(name)
@@ -374,8 +403,20 @@ def formula_items(detail):
             detected += "; column is out of position"
         if errors:
             detected += "\n" + "\n".join(message for _, message in errors[:20])
+        issues = []
+        if errors:
+            labels = "Use the required formula and check its results" if name != "ISO Codes" else "Use exact-match VLOOKUP or XLOOKUP to return the three-letter ISO code"
+            issues.append(f"{labels} in {detail.location(name, [row for row, _ in errors])}.")
+        if fmt:
+            target = "Accounting or Currency" if name in MONEY else "Text or General without scientific notation"
+            issues.append(f"Use {target} in {detail.location(name, fmt)}.")
+        if position_issue:
+            target = "immediately after Days to Fulfil" if name == "Order Status" else "between Country and Item Type"
+            issues.append(f"Move {name} {target}.")
+        if not detail.rows:
+            issues.append("No transaction rows were available to check this formula.")
         yield rubric_item(7+offset, score, detail.location(name, [row for row, _ in errors] or fmt or uncertain),
-                          expected_text, detected, f"Check {name}, including its formula, results, placement and format as applicable (tasks 6–9).",
+                          expected_text, detected, " ".join(issues),
                           f"Review {len(uncertain)} row(s) whose formula equivalence or inputs could not be fully verified." if uncertain else "")
 
 
@@ -502,7 +543,7 @@ def compare_summary(rows, expected):
         elif equal(found, value):
             matches += 1
         else:
-            mismatches.append(f"{position[0]} / {position[1]}: expected {value:g}, found {found}")
+            mismatches.append(f"{position[0]} / {position[1]}: expected {format(value, ',.8f').rstrip('0').rstrip('.')}, found {found}")
     extras = set(rows) - set(expected_cells)
     mismatches.extend(f"Unexpected category / metric: {label} / {metric}" for label, metric in sorted(extras))
     return matches, len(expected_cells), mismatches
@@ -537,7 +578,8 @@ def aggregate_tables(sheet, cached, expected, group):
     for row, col, value in cells:
         if any(l <= col <= r and t <= row <= b for l, t, r, b in pivot_bounds):
             continue
-        if key(value) not in {"region", "year", "orderyear", "orderdate", "orderpriority", "priority", "salesyear", "years"}:
+        if key(value) not in {"Bar": {"region"}, "Line": {"year", "orderyear", "orderdate", "salesyear", "years"},
+                              "Combo": {"orderpriority", "priority"}}[group]:
             continue
         headings = {}
         for column in range(col+1, min(col+12, sheet.max_column)+1):
@@ -567,15 +609,32 @@ def aggregate_tables(sheet, cached, expected, group):
     return best
 
 
+def pivot_source_kind(source, chart_sheet, detail):
+    if source is None:
+        return ""
+    name = key(source.name)
+    if name and any(key(table) == name for table in detail.sheet.tables):
+        return "main transaction table"
+    if source.ref and similar(source.sheet, detail.sheet.title):
+        left, top, right, bottom = range_boundaries(source.ref)
+        if None not in (left, top, right, bottom) and top == detail.header and bottom > top:
+            return "main transaction range"
+    if (name and any(key(table) == name for table in getattr(chart_sheet, "tables", {}))
+            or source.ref and similar(source.sheet, chart_sheet.title)):
+        return "transaction copy on the chart worksheet"
+    return ""
+
+
 def pivot_checks(sheet, cached, group, expected, detail):
     if not sheet or not getattr(sheet, "_pivots", []):
-        return 0, "No PivotTable on the chart worksheet", ""
-    best = (0, "", "")
+        return 0, "No PivotTable on the chart worksheet", "", "Create a PivotTable on the chart worksheet."
+    best = (0, "", "", "")
     for pivot in sheet._pivots:
         cache = pivot.cache
         fields = [field.name for field in cache.cacheFields] if cache else []
         source = cache.cacheSource.worksheetSource if cache and cache.cacheSource else None
         source_text = (source.name or f"{source.sheet}!{source.ref}") if source else "Unknown"
+        source_kind = pivot_source_kind(source, sheet, detail)
         values = [(fields[f.fld] if 0 <= f.fld < len(fields) else f.fld, f.subtotal, f.numFmtId)
                   for f in (pivot.dataFields or [])]
         location = pivot.location.ref
@@ -634,13 +693,22 @@ def pivot_checks(sheet, cached, group, expected, detail):
                 displayed = [cell for cell in sheet._cells.values()
                              if top < cell.row <= bottom and left < cell.column <= right and numeric(cell.value)]
                 formats = bool(displayed) and all(currency(cell.number_format) for cell in displayed)
-        score = 2 if settings and count and matches == count and not differences and formats else 1
-        evidence = f"{sheet.title}!{location} · {pivot.name}; source {source_text}; rows {rows}; columns {columns}; value settings {values}; {matches}/{count} expected values matched"
+        score = 2 if source_kind and settings and count and matches == count and not differences and formats else 1
+        evidence = f"{sheet.title}!{location} · {pivot.name}; source {source_text} ({source_kind or 'unverified source'}); rows {rows}; columns {columns}; value settings {values}; {matches}/{count} expected values matched"
         if differences:
             evidence += "\n" + "\n".join(differences[:12])
         review = "Pivot layout or displayed values could not be fully confirmed." if settings and not matrix else ""
+        issues = []
+        if not source_kind:
+            issues.append("Use DetailTable or the copied transactions on this chart worksheet as the PivotTable source.")
+        if not settings:
+            issues.append("Correct the PivotTable grouping or value-field aggregation.")
+        if not count or matches != count or differences:
+            issues.append(f"The saved PivotTable matches {matches} of {count} expected summary values.")
+        if not formats:
+            issues.append("Use Currency or Accounting in the PivotTable value field settings.")
         if score > best[0]:
-            best = score, evidence, review
+            best = score, evidence, review, " ".join(issues)
     return best
 
 
@@ -698,10 +766,20 @@ def chart_items(book, cached, detail):
                 years = [category_key(value, group) for value in categories if value is not None]
                 line_sorted = line_sorted and years == sorted(years)
         aggregation = 2 if full_table and formulas and line_sorted else 1 if table_matches or matches or formulas else 0
+        issues = []
+        if not address:
+            issues.append(f"Could not identify a separate {group.lower()} summary table on {location}.")
+        elif not full_table:
+            details = f" {table_diffs[0]}." if table_diffs else ""
+            issues.append(f"Only {table_matches} of {expected_count} expected summary values match DetailTable.{details}")
+        if address and not formulas:
+            issues.append(f"No aggregation formulas were found in {address}.")
+        if not line_sorted:
+            issues.append("Sort the years in ascending order in the plotted source data.")
         yield rubric_item(index, aggregation, address or location, f"Formula-based {group.lower()} summary of DetailTable (task 11)",
                           f"{table_matches}/{expected_count} summary cells matched; {matches}/{expected_count} plotted cells matched; chronological order: {line_sorted}\n"
                           + "\n".join(examples[:12] + table_diffs[:12]),
-                          "Check the source data, aggregation formulas and sort order for this chart.",
+                          " ".join(issues),
                           "The workbook cannot prove whether the student used filters or copied the data as instructed.")
         correct_type = bool(chart and type_ok(chart))
         correct_data = bool(count and matches == count and not differences and not unresolved)
@@ -716,9 +794,19 @@ def chart_items(book, cached, detail):
             correct_data = all((metric_label(label, {"Units Sold", "Days to Fulfil"}) == "Units Sold") ==
                                (kind == "BarChart") for kind, label, *_ in data)
         chart_score = 2 if correct_type and correct_data and chart.legend else 1 if chart and (correct_type or matches) else 0
+        chart_issues = []
+        if not chart:
+            chart_issues.append(f"Create the {group.lower()} chart on {location}.")
+        else:
+            if not correct_type:
+                chart_issues.append(f"Use the required {group.lower()} chart type.")
+            if not correct_data:
+                chart_issues.append(f"The plotted series or values differ from the required data ({matches}/{count} values match).")
+            if not chart.legend:
+                chart_issues.append("Add a chart legend.")
         yield rubric_item(index+1, chart_score, location, f"{group} chart with the required series, data and legend (task 11)",
                           (chart_refs or "No suitable chart") + f"\nType matches: {correct_type}; legend: {bool(chart and chart.legend)}; {captured} plotted values\n"
-                          + "\n".join(differences[:12]), "Check the chart type, series, plotted values and legend.",
+                          + "\n".join(differences[:12]), " ".join(chart_issues),
                           "Some chart source values could not be read from saved ranges or caches." if chart and not captured else "")
         title_issues = []
         if not sheet or not similar(sheet.title, target):
@@ -735,29 +823,37 @@ def chart_items(book, cached, detail):
             if not units:
                 title_issues.append("currency or display units")
         yield rubric_item(index+2, bands(title_issues) if chart else 0, location, f'{target} · “{title}” · appropriate axis titles and units (task 11)',
-                          "; ".join(title_issues) or "Required labels present", "Correct the worksheet or chart labels listed.",
+                          "; ".join(title_issues) or "Required labels present",
+                          "Correct the following: " + "; ".join(title_issues) + "." if chart else "Add the chart and its required labels.",
                           "Axis title wording and visual readability may need instructor review." if chart else "")
-        pivot_score, pivot_evidence, review = pivot_checks(sheet, cached[sheet.title] if sheet else None, group, expected, detail)
+        pivot_score, pivot_evidence, review, pivot_feedback = pivot_checks(sheet, cached[sheet.title] if sheet else None, group, expected, detail)
         yield rubric_item(index+3, pivot_score, location, "PivotTable mirrors the source summary with appropriate value settings (task 12)",
-                          pivot_evidence, "Create or correct the PivotTable, its grouping, aggregation and value formats.", review)
+                          pivot_evidence, pivot_feedback, review)
 
 
 def level(total):
     return "Level 4" if total >= 42 else "Level 3" if total >= 34 else "Level 2" if total >= 26 else "Poor"
 
 
+def detail_sheet(book):
+    named = sheet_named(book, "Detail")
+    if named is not None and len(header_map(named)[1]) >= 4:
+        return named
+    return max(book.worksheets, key=lambda sheet: (
+        any(key(table) == "detailtable" for table in sheet.tables),
+        len(header_map(sheet)[1]),
+    ))
+
+
 def grade(path):
     path = Path(path).resolve()
     result = {"filename": path.name, "source_path": str(path), "version": VERSION}
     try:
-        if path.suffix.lower() != ".xlsx":
-            raise ValueError("The assignment requires an .xlsx workbook.")
+        if path.suffix.lower() not in WORKBOOK_SUFFIXES:
+            raise ValueError("Select an .xlsx or .xlsm workbook.")
         book, cached = load_pair(path)
         try:
-            sheet = sheet_named(book, "Detail")
-            if sheet is None:
-                candidates = [(len(header_map(s)[1]), s) for s in book.worksheets]
-                sheet = max(candidates, key=lambda item: item[0])[1]
+            sheet = detail_sheet(book)
             detail = Detail(sheet, cached[sheet.title])
             if len(detail.columns) < 4:
                 raise ValueError("Could not identify the assignment transaction headers.")
@@ -769,8 +865,8 @@ def grade(path):
                 advisories.append(f"Workbook has {len(book.worksheets)} regular worksheets; the instructions require at least five.")
             if (sheet.sheet_view.zoomScale or 100) != 100:
                 advisories.append(f"{sheet.title}: worksheet zoom is {sheet.sheet_view.zoomScale}%, expected 100%.")
-            if key(sheet["Z1"].value) != "cats":
-                advisories.append(f"{sheet.title}!Z1: expected the word cats.")
+            if str(cached[sheet.title]["Z1"].value or "").strip().casefold() == "cats":
+                result["marker"] = f"{sheet.title}!Z1 contains “cats”"
             if not key(path.stem).startswith("salesdata"):
                 advisories.append("The instructions ask for a Sales Data filename with the student’s last name and ID.")
             result.update(items=items, total=total, level=level(total), advisories=advisories,

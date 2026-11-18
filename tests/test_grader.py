@@ -122,6 +122,21 @@ class TestGrader(unittest.TestCase):
             for index in (16, 18, 19, 22, 23):
                 self.assertEqual(outcome["items"][index]["score"], 2, outcome["items"][index])
 
+            book = load_workbook(path)
+            bar_sheet = book["Bar Chart"]
+            for row, data in enumerate((["Region", "Total Revenue", "Total Cost", "Total Profit"],
+                                        ["Asia", 250, 50, 200]), 10):
+                for column, value in enumerate(data, 1):
+                    bar_sheet.cell(row, column, value)
+            pivot = bar_sheet._pivots[0]
+            pivot.cache.cacheSource.worksheetSource = WorksheetSource(ref="A10:D11", sheet="Bar Chart")
+            book.save(path)
+            book.close()
+            outcome = grade(path)
+            local_pivot = outcome["items"][16]
+            self.assertEqual(local_pivot["score"], 2, local_pivot)
+            self.assertIn("transaction copy on the chart worksheet", local_pivot["detected"])
+
     def test_exports_and_benchmark(self):
         with TemporaryDirectory() as root:
             root = Path(root)

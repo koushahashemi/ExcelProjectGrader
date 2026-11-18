@@ -14,13 +14,55 @@ def csv_value(value):
     return value
 
 
+def item_feedback(item):
+    return f"• {item['name']} ({item['score']}/{item['maximum']}) · {item['location']}\n  {item['feedback']}"
+
+
+def flag_labels(result):
+    labels = []
+    if result.get("marker"):
+        labels.append(result["marker"])
+    if any(match["identical_file"] or max(match["overlap"], match["peer_overlap"]) > 90
+           for match in result.get("similarity", [])):
+        labels.append("Similar submission")
+    if any(match["metadata"] for match in result.get("similarity", [])):
+        labels.append("Shared metadata")
+    if result.get("comparison_error"):
+        labels.append("Comparison unavailable")
+    return ", ".join(labels)
+
+
+def flag_details(result):
+    lines = []
+    if result.get("marker"):
+        lines.append(f"Assignment marker found: {result['marker']}.")
+    if result.get("comparison_error"):
+        lines.append(f"Comparison unavailable: {result['comparison_error']}")
+    for match in result.get("similarity", []):
+        peer = match["peer"]
+        lines.append(f"Compared with {peer}")
+        if match["identical_file"]:
+            lines.append("Identical file contents (SHA-256).")
+        lines.append(f"Matching transaction rows: {match['matching_rows']}/{match['row_count']} "
+                     f"({match['overlap']:.1f}%) and {match['matching_rows']}/{match['peer_row_count']} "
+                     f"({match['peer_overlap']:.1f}%).")
+        if match["row_pairs"]:
+            lines.append(f"Matched rows in {match['sheet']} ↔ {match['peer_sheet']}: " +
+                         ", ".join(f"{a} ↔ {b}" for a, b in match["row_pairs"]))
+        if match["metadata"]:
+            lines.append("Shared metadata: " + ", ".join(f"{name}: {value}" for name, value in match["metadata"].items()))
+    if lines:
+        lines.append("Instructor review only. These signals carry zero points and do not establish authorship or AI use.")
+    return "\n".join(lines)
+
+
 def feedback(result):
     if "error" in result:
-        return "The workbook could not be graded. Submit a readable .xlsx workbook for this assignment."
+        return "The workbook could not be graded. Submit a readable .xlsx or .xlsm workbook for this assignment."
     lines = [f"{result['filename']} — {result['total']}/{MAXIMUM} ({result['level']})"]
     for item in result["items"]:
         if item["score"] < item["maximum"]:
-            lines.append(f"• {item['name']} ({item['score']}/{item['maximum']}) · {item['location']}\n  {item['feedback']}")
+            lines.append(item_feedback(item))
     if len(lines) == 1:
         lines.append("Full marks on the scored rubric items.")
     lines.extend(f"• Assignment advisory · {note}" for note in result["advisories"])
@@ -30,10 +72,11 @@ def feedback(result):
 
 
 def details(result, index=None):
+    flags = flag_details(result) if index is None else ""
     if "error" in result:
-        return f"{result['source_path']}\n{result['error']}"
+        return f"{result['source_path']}\n{result['error']}\n{flags}"
     items = result["items"] if index is None else [result["items"][index]]
-    return "\n\n".join(
+    return (flags + "\n\n" if flags else "") + "\n\n".join(
         f"{item['name']} — {item['score']}/{item['maximum']}\nLocation: {item['location']}\n"
         f"Expected: {item['expected']}\nDetected: {item['detected']}"
         + (f"\nInstructor review: {item['review']}" if item["review"] else "")
@@ -43,7 +86,7 @@ def details(result, index=None):
 
 def score_rows(results):
     for result in results:
-        yield [result["filename"], result.get("total", ""), result["status"],
+        yield [result["filename"], result.get("total", ""), result["status"], flag_labels(result),
                *[item["score"] for item in result.get("items", [])],
                *([""] * len(RUBRIC) if "error" in result else [])]
 
@@ -51,7 +94,7 @@ def score_rows(results):
 def export_scores(path, results):
     with Path(path).open("w", encoding="utf-8-sig", newline="") as stream:
         writer = csv.writer(stream)
-        writer.writerow(["Filename", f"Total /{MAXIMUM}", "Status", *[f"{name} /{points}" for name, points in RUBRIC]])
+        writer.writerow(["Filename", f"Total /{MAXIMUM}", "Status", "Instructor flags", *[f"{name} /{points}" for name, points in RUBRIC]])
         writer.writerows([csv_value(value) for value in row] for row in score_rows(results))
 
 
@@ -69,7 +112,7 @@ def html_report(results):
                         f'<textarea id="feedback-{index}" readonly rows="7">{escape(feedback(result))}</textarea>'
                         f'<details><summary>Instructor evidence</summary><pre>{escape(details(result))}</pre></details></section>')
     headings = "".join(f'<th scope="col">{escape(name)}</th>' for name in
-                       ["Submission", "Total", "Status", *[f"{name} /{maximum}" for name, maximum in RUBRIC]])
+                       ["Submission", "Total", "Status", "Instructor flags", *[f"{name} /{maximum}" for name, maximum in RUBRIC]])
     return f"""<!doctype html>
 <html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width">
 <title>{TITLE} · Instructor report</title>
