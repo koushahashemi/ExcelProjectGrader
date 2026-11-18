@@ -13,7 +13,7 @@ from openpyxl.utils.cell import range_boundaries, get_column_letter
 from openpyxl.utils.datetime import from_excel
 from openpyxl.styles.numbers import is_date_format
 
-VERSION = "1.1.1"
+VERSION = "1.1.2"
 WORKBOOK_SUFFIXES = {".xlsx", ".xlsm"}
 TITLE = "Excel Project Grader"
 COURSE = "BSYS-1000 · Individual Project (Excel) · Fall 2026"
@@ -103,6 +103,13 @@ def format_ok(cell, name, value=None):
         return currency(fmt) and bool(re.search(r"[0#?]", code))
     if name in {"Order Date", "Ship Date"}:
         return is_date_format(fmt) and (bool(re.search(r"[dy]", code, re.I)) or ("m" in code.casefold() and not re.search(r"[hs]", code, re.I)))
+    if name in {"Order ID", "Units Sold", "Days to Fulfil"} and fmt.casefold() != "general":
+        sections = code.split(";")
+        number = r"[+-]?\(?[0#?]+(?:,[0#?]+)*(?:\.[0#?]+)?\)?[+-]?"
+        numeric_sections = [re.sub(r"_.|\*.", "", section).replace(" ", "") for section in sections[:3]]
+        return (bool(numeric_sections[0]) and not currency(fmt)
+                and all(re.fullmatch(number, section) for section in numeric_sections if section)
+                and (name != "Order ID" or all("." not in section for section in numeric_sections)))
     if fmt.casefold() not in {"general", "@"}:
         return False
     if fmt.casefold() == "general" and numeric(value) and value != 0:
@@ -408,7 +415,11 @@ def formula_items(detail):
             labels = "Use the required formula and check its results" if name != "ISO Codes" else "Use exact-match VLOOKUP or XLOOKUP to return the three-letter ISO code"
             issues.append(f"{labels} in {detail.location(name, [row for row, _ in errors])}.")
         if fmt:
-            target = "Accounting or Currency" if name in MONEY else "Text or General without scientific notation"
+            target = {
+                "Days to Fulfil": "General or Number without scientific notation",
+                "Order Status": "Text or General",
+                "ISO Codes": "Text or General",
+            }.get(name, "Accounting or Currency")
             issues.append(f"Use {target} in {detail.location(name, fmt)}.")
         if position_issue:
             target = "immediately after Days to Fulfil" if name == "Order Status" else "between Country and Item Type"

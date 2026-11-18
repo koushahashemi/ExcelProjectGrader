@@ -8,7 +8,7 @@ import unittest
 from openpyxl import load_workbook
 
 from batch_tools import compare_workbooks, trim_filenames
-from grader import formula_matches, grade
+from grader import format_ok, formula_matches, grade
 from reports import export_report
 from test_grader import submission
 
@@ -23,6 +23,28 @@ class TestVersion110(unittest.TestCase):
         for arguments in (')', ',,0)', ',"missing",0,-1)'):
             self.assertTrue(formula_matches(lookup + arguments, "ISO Codes", 2, columns))
         self.assertFalse(formula_matches(lookup + ',,1)', "ISO Codes", 2, columns))
+
+    def test_assignment_number_formats(self):
+        from openpyxl import Workbook
+
+        book = Workbook()
+        cell = book.active["A2"]
+        formats = {
+            "Order ID": (("General", "0", "#,##0", "#,##0;[Red](#,##0)"), ("0.0", "0.##", "0E+00", "@")),
+            "Units Sold": (("General", "0", "#,##0.00"), ("0%", "0/0", "0E+00", "@")),
+            "Days to Fulfil": (("General", "0", "0.00"), ("m/d/yy", "0.0E+00", "@")),
+            "Order Status": (("General", "@"), ("0", '"$"#,##0.00')),
+            "Unit Price": (('"$"#,##0.00', '[$€-407] #,##0.00'), ("0.00", '[$-409]0.00')),
+            "Order Date": (("m/d/yy", "mmm", "yyyy-mm-dd hh:mm"), ("hh:mm", "General")),
+        }
+        for name, (accepted, rejected) in formats.items():
+            for fmt in accepted + rejected:
+                with self.subTest(name=name, format=fmt):
+                    cell.number_format = fmt
+                    self.assertEqual(format_ok(cell, name, 42), fmt in accepted)
+        cell.number_format = "General"
+        self.assertFalse(format_ok(cell, "Order ID", 123456789012))
+        book.close()
 
     def test_formats_and_instructor_exports(self):
         with TemporaryDirectory() as directory:
