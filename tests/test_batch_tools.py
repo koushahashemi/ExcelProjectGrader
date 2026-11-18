@@ -63,25 +63,55 @@ class TestVersion110(unittest.TestCase):
                 detail[f"I{row}"] = row + 1000
             book.properties.creator = "Fixture author"
             book.properties.modified = datetime(2026, 2, 1)
+            detail.tables["DetailTable"].ref = "A1:Q12"
             book.save(left)
             copyfile(left, right)
-            detail.delete_rows(10, 3)
+            detail.tables["DetailTable"].ref = "A1:Q9"
             book.save(subset)
             book.close()
             flags, errors = compare_workbooks([left, right, subset])
             self.assertFalse(errors)
             identical, copied = flags[str(left.resolve())]
-            self.assertTrue(identical["identical_file"])
+            self.assertEqual(identical["overlap"], 100)
             self.assertEqual(identical["matching_rows"], 11)
             self.assertEqual(copied["peer_overlap"], 100)
-            self.assertLess(copied["overlap"], 90)
-            self.assertEqual(copied["metadata"]["Author"], "Fixture author")
+            self.assertLess(copied["overlap"], 80)
+            self.assertEqual(copied["peer_row_count"], 8)
             renamed, skipped = trim_filenames([left, right, subset])
             self.assertEqual(len(renamed), 2)
             self.assertIn("already exists", skipped[0])
             self.assertTrue(right.exists())
             self.assertTrue((root / "Sales Data.xlsx").exists())
             self.assertTrue((root / "Subset.xlsx").exists())
+
+
+    def test_comparison_strict_threshold_ignores_metadata(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            left, boundary, above = (root / f"{name}.xlsx" for name in ("left", "boundary", "above"))
+            submission(left)
+            book = load_workbook(BytesIO(left.read_bytes()))
+            sheet = book["Detail"]
+            for row in range(3, 12):
+                for column in range(1, 18):
+                    sheet.cell(row, column, sheet.cell(2, column).value)
+                sheet[f"I{row}"] = row
+            sheet.tables["DetailTable"].ref = "A1:Q11"
+            book.properties.creator = "Shared author"
+            book.save(left)
+            sheet["I10"], sheet["I11"] = 2010, 2011
+            book.save(boundary)
+            sheet["I10"] = 10
+            book.save(above)
+            book.close()
+
+            flags, errors = compare_workbooks([left, boundary])
+            self.assertFalse(errors)
+            self.assertFalse(any(flags.values()))
+            flags, errors = compare_workbooks([left, above])
+            self.assertFalse(errors)
+            self.assertEqual(flags[str(left.resolve())][0]["overlap"], 90)
+            self.assertEqual(flags[str(above.resolve())][0]["matching_rows"], 9)
 
 
 if __name__ == "__main__":

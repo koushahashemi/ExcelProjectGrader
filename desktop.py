@@ -243,7 +243,7 @@ class App:
                 result["comparison_error"] = errors[path]
         self.refresh_rows()
         similarity_count = sum(bool(matches) for matches in flags.values())
-        self.status.set(f"Comparison complete · {similarity_count} workbooks with shared signals · {len(errors)} errors")
+        self.status.set(f"Comparison complete · {similarity_count} workbooks with matching transaction rows · {len(errors)} errors")
 
     def rename_dialog(self):
         if self.remaining or self.comparing:

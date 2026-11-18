@@ -22,11 +22,8 @@ def flag_labels(result):
     labels = []
     if result.get("marker"):
         labels.append(result["marker"])
-    if any(match["identical_file"] or max(match["overlap"], match["peer_overlap"]) > 90
-           for match in result.get("similarity", [])):
+    if result.get("similarity"):
         labels.append("Similar submission")
-    if any(match["metadata"] for match in result.get("similarity", [])):
-        labels.append("Shared metadata")
     if result.get("comparison_error"):
         labels.append("Comparison unavailable")
     return ", ".join(labels)
@@ -41,16 +38,12 @@ def flag_details(result):
     for match in result.get("similarity", []):
         peer = match["peer"]
         lines.append(f"Compared with {peer}")
-        if match["identical_file"]:
-            lines.append("Identical file contents (SHA-256).")
         lines.append(f"Matching transaction rows: {match['matching_rows']}/{match['row_count']} "
                      f"({match['overlap']:.1f}%) and {match['matching_rows']}/{match['peer_row_count']} "
                      f"({match['peer_overlap']:.1f}%).")
         if match["row_pairs"]:
             lines.append(f"Matched rows in {match['sheet']} ↔ {match['peer_sheet']}: " +
                          ", ".join(f"{a} ↔ {b}" for a, b in match["row_pairs"]))
-        if match["metadata"]:
-            lines.append("Shared metadata: " + ", ".join(f"{name}: {value}" for name, value in match["metadata"].items()))
     if lines:
         lines.append("Instructor review only. These signals carry zero points and do not establish authorship or AI use.")
     return "\n".join(lines)

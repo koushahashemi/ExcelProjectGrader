@@ -20,7 +20,7 @@ Excel’s saved data, formulas, metadata and caches are used as evidence. Common
 
 ## Batch utilities
 
-**Check for similar submissions** runs on demand against the current batch. It compares complete source transaction signatures independently of row order. A match above 90% of either file is flagged, with percentages in both directions and the matching row locations. Identical file contents and shared nonblank Author, Last Modified By or modification timestamp are separate signals. Metadata can come from the common starter or a shared machine. Flags are for instructor review and carry zero points. Student feedback excludes these flags and their evidence.
+**Check for similar submissions** runs on demand against the current batch. It compares complete source transaction signatures independently of row order. A pair is flagged if more than 80% of the transaction rows in either detail table match. The report shows percentages in both directions and the matching row locations. Flags are for instructor review and carry zero points. Student feedback excludes these flags and their evidence.
 
 **Trim filenames** opens a dialog for selecting workbooks or a folder. It removes the prefix through the first underscore, preserves the extension and skips collisions. Review the dialog’s result for any skipped files.
 
