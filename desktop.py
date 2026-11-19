@@ -60,8 +60,13 @@ class App:
         self.clear_button = ttk.Button(actions, text="Clear batch", command=self.clear)
         self.clear_button.pack(side="left")
         ttk.Button(actions, text="Export grades CSV…", command=lambda: self.save("csv")).pack(side="right")
-        ttk.Button(actions, text="Save feedback…", command=lambda: self.save("feedback")).pack(side="right", padx=5)
-        ttk.Button(actions, text="Save full report…", command=lambda: self.save("report")).pack(side="right")
+        ttk.Button(actions, text="Save student feedback…", command=lambda: self.save("feedback")).pack(side="right", padx=5)
+        report = ttk.Menubutton(actions, text="Save instructor report")
+        menu = tk.Menu(report, tearoff=False)
+        for title, kind in (("Formatted HTML", "html"), ("Plain text", "txt"), ("JSON evidence", "json")):
+            menu.add_command(label=title, command=lambda kind=kind: self.save(kind))
+        report["menu"] = menu
+        report.pack(side="right")
 
         utilities = ttk.Frame(frame)
         utilities.pack(fill="x", pady=(5, 0))
@@ -384,20 +389,12 @@ class App:
         if not self.results:
             messagebox.showinfo("No submissions", "Add submissions before exporting.")
             return
-        export_options = {
-            "feedback": ("Feedback", ".txt", [("Plain-language feedback", "*.txt")]),
-            "csv": ("Grades", ".csv", [("CSV grade table", "*.csv")]),
-            "report": ("Report", ".txt", [("Detailed text report", "*.txt"),
-                                          ("Machine-readable JSON", "*.json"),
-                                          ("Formatted HTML", "*.html")]),
-        }
-        label, suffix, types = export_options[kind]
-        path = filedialog.asksaveasfilename(defaultextension=suffix, filetypes=types,
-                                            initialfile=f"BCIT_BSYS1000_Fall2026_{label}{suffix}")
+        suffix = "txt" if kind == "feedback" else kind
+        path = filedialog.asksaveasfilename(defaultextension=f".{suffix}", filetypes=[(suffix.upper(), f"*.{suffix}")],
+                                            initialfile=f"excel-grader-{kind}.{suffix}")
         if path:
             try:
-                report_kind = Path(path).suffix.lower().lstrip(".") if kind == "report" else kind
-                export_report(path, self.results, report_kind)
+                export_report(path, self.results, kind)
                 self.status.set(f"Saved {Path(path).name}")
             except OSError as error:
                 messagebox.showerror("Could not save report", str(error))

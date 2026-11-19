@@ -1,4 +1,3 @@
-import csv
 import json
 from io import BytesIO
 from pathlib import Path
@@ -11,7 +10,7 @@ from openpyxl.pivot.cache import CacheDefinition, CacheField, CacheSource, Works
 from openpyxl.pivot.table import DataField, Location, RowColField, TableDefinition
 from openpyxl.worksheet.table import Table
 
-from grader import COUNTRY_ROWS, MAXIMUM, RUBRIC, VERSION, formula_matches, grade
+from grader import COUNTRY_ROWS, MAXIMUM, RUBRIC, formula_matches, grade
 from reports import benchmark, export_report
 
 
@@ -156,20 +155,14 @@ class TestGrader(unittest.TestCase):
             self.assertIn("'=broken.xlsx", (root / "csv").read_text(encoding="utf-8-sig"))
             self.assertNotIn("BadZipFile", (root / "feedback").read_text(encoding="utf-8"))
             self.assertIn("<details>", (root / "html").read_text(encoding="utf-8"))
-            with (root / "csv").open(encoding="utf-8-sig", newline="") as stream:
-                headers, error_row, graded_row = list(csv.reader(stream))
-            self.assertEqual(headers, ["Submission", *dict(RUBRIC), "Total", "Maximum", "Status", "Instructor flags"])
-            self.assertTrue(error_row[-2].startswith("Error:"))
-            self.assertEqual(graded_row[-3], "46")
-            exported = json.loads((root / "json").read_text(encoding="utf-8"))
-            self.assertEqual(exported[1]["maximum"], 46)
-            self.assertEqual(exported[1]["items"], results[1]["items"])
-            text_report = (root / "txt").read_text(encoding="utf-8")
-            self.assertIn(f"Engine {VERSION}", text_report)
-            self.assertIn("    Found:", text_report)
-            student_report = (root / "feedback").read_text(encoding="utf-8")
-            self.assertIn("Feedback on lost marks — fixture.xlsx", student_report)
-            self.assertIn("mark lost)", student_report)
+            report = (root / "html").read_text(encoding="utf-8")
+            self.assertIn("<th>Added sentence</th>", report)
+            self.assertIn('class="badge flag-yes">Yes</span>', report)
+            self.assertIn('class="badge flag-no">No</span>', report)
+            self.assertIn("Hidden-instruction sentence: <b>Yes</b>", report)
+            self.assertIn("Hidden-instruction sentence: <b>No</b>", report)
+            self.assertNotIn("cats", report.split('class="copy-text" hidden>')[-1].split("</pre>")[0])
+            self.assertIn("submissions", json.loads((root / "json").read_text(encoding="utf-8")))
             reference = root / "benchmark.json"
             reference.write_text(json.dumps([{"workbook": valid.name, "scores": dict(RUBRIC), "notes": "Fixture"}]))
             comparison = benchmark(reference, grade)

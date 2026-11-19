@@ -28,8 +28,7 @@ jobs:
         run: |
           .venv/Scripts/python.exe -c "from openpyxl import Workbook; Workbook().save('smoke.xlsx')"
           Start-Process -FilePath "dist/ExcelProjectGrader.exe" -ArgumentList "--json smoke.json smoke.xlsx" -Wait
-          $report = ConvertFrom-Json -InputObject (Get-Content smoke.json -Raw) -NoEnumerate
-          if ($report[0].status -ne 'Error') { throw 'Packaged grader did not generate evidence' }
+          if ((Get-Content smoke.json -Raw | ConvertFrom-Json).submissions[0].status -ne 'Error') { throw 'Packaged grader did not generate evidence' }
       - uses: actions/upload-artifact@v4
         with:
           name: ExcelProjectGrader-Windows

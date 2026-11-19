@@ -12,7 +12,7 @@ From a source checkout, install Python 3.12 including Tcl/Tk and the Python laun
 
 Drop .xlsx or .xlsm workbooks into the window, select individual or multiple files, or choose a folder. Select a submission to see rubric scores and feedback. Select a rubric item for technical evidence. Double-click the filename to open the original workbook. Grading reads the workbooks without launching Excel, executing macros, updating external links, or saving changes to submissions.
 
-Export the class grade table as CSV. Save the student feedback separately as text. From **Save full report**, choose detailed text, JSON, or HTML. JSON reports contain a top-level array of submissions. Instructor reports include technical evidence and may contain student data or local file paths.
+Export the class grade table as CSV. Save the student feedback separately as text. HTML, text and JSON instructor reports include technical evidence and may contain student data or local file paths.
 
 The checks use the Fall 2026 Excel instructions and rubric. The bundled reference is the country-code data extracted from the supplied starter. The rubric’s single-point items use 0 or 1 and the other items use 0, 1 or 2. Separate advisories cover worksheet count, Detail zoom and filename prefix. A saved `cats` value in Z1 on the transaction worksheet is highlighted and recorded in instructor exports. The workbook does not establish identity, lateness, original macro execution, or whether filters and copying were used. No separate Excel style guide was supplied.
 
@@ -34,4 +34,4 @@ python -m unittest discover -s tests -v
 python desktop.py --json batch.json submission1.xlsx submission2.xlsx
 ```
 
-For calibration, keep instructor benchmark workbooks locally. Create a JSON array of entries with `workbook` (a path relative to the JSON file), `scores` (an object keyed by the 25 exact rubric names from the CSV headers), and optional `notes`. Run `python desktop.py --benchmark benchmarks.json --json comparison.json`. The comparison records differences by item, instructor notes, and automatic evidence to guide rule changes and regression checks. It does not apply benchmark scores to unrelated submissions.
+For calibration, keep instructor benchmark workbooks locally. Create a JSON array of entries with `workbook` (a path relative to the JSON file), `scores` (an object keyed by the 25 exact rubric names from the CSV headers, without the point suffixes), and optional `notes`. Run `python desktop.py --benchmark benchmarks.json --json comparison.json`. The comparison records differences by item, instructor notes, and automatic evidence to guide rule changes and regression checks. It does not apply benchmark scores to unrelated submissions.
