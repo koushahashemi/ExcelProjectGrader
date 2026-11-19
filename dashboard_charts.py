@@ -1,8 +1,6 @@
 """Native Tk charts for the filtered grading dashboard."""
 from collections import defaultdict
 from statistics import mean, quantiles
-import tkinter as tk
-from tkinter import ttk
 
 TEAL, BG, INK, MUTED, LINE = "#00796B", "#f6f8f9", "#1d2327", "#5f6b72", "#dde3e6"
 FULL, MID, LOW = "#e3f3ee", "#fff3d6", "#fde4e1"
@@ -31,31 +29,18 @@ def box_summary(values):
 
 
 class DashboardCharts:
-    def __init__(self, parent):
-        controls = ttk.Frame(parent, padding=8)
-        controls.pack(fill="x")
-        ttk.Label(controls, text="Chart").pack(side="left", padx=(0, 5))
-        self.kind = tk.StringVar(parent, value=CHART_TYPES[0])
-        picker = ttk.Combobox(controls, textvariable=self.kind, values=CHART_TYPES, state="readonly", width=26)
-        picker.pack(side="left")
-        picker.bind("<<ComboboxSelected>>", self.draw)
-        frame = ttk.Frame(parent)
-        frame.pack(fill="both", expand=True)
-        self.canvas = tk.Canvas(frame, background="white", highlightthickness=0)
-        x = ttk.Scrollbar(frame, orient="horizontal", command=self.canvas.xview)
-        y = ttk.Scrollbar(frame, orient="vertical", command=self.canvas.yview)
-        self.canvas.configure(xscrollcommand=x.set, yscrollcommand=y.set)
-        self.canvas.grid(row=0, column=0, sticky="nsew")
-        x.grid(row=1, column=0, sticky="ew")
-        y.grid(row=0, column=1, sticky="ns")
-        frame.columnconfigure(0, weight=1)
-        frame.rowconfigure(0, weight=1)
-        self.canvas.bind("<Configure>", self.draw)
-        self.data = ([], [], ())
+    def __init__(self, canvas):
+        self.canvas = canvas
 
-    def update(self, scored, stats, selected):
-        self.data = scored, stats, selected
-        self.draw()
+    def measure(self, kind, width, scored, stats, selected):
+        sets = {entry.set_name for entry, _ in scored}
+        if kind == CHART_TYPES[2]:
+            return max(width, 285 + 120 * len(sets)), max(275, 96 + 30 * len(selected))
+        if kind == CHART_TYPES[3]:
+            return width, max(275, 93 + 37 * len(sets))
+        if kind in (CHART_TYPES[1], CHART_TYPES[4]):
+            return width, max(275, 90 + 30 * len(stats))
+        return width, 275
 
     def text(self, x, y, text, anchor="w", color=INK, bold=False):
         self.canvas.create_text(x, y, text=text, anchor=anchor, fill=color,
@@ -71,12 +56,7 @@ class DashboardCharts:
             self.canvas.create_line(x, y, x, y + 5, fill=MUTED)
             self.text(x, y + 16, f"{value}%", "center", MUTED)
 
-    def draw(self, _event=None):
-        scored, stats, selected = self.data
-        self.canvas.delete("all")
-        width = max(680, self.canvas.winfo_width())
-        height = max(265, self.canvas.winfo_height())
-        kind = self.kind.get()
+    def render(self, kind, width, height, scored, stats, selected):
         self.text(20, 20, kind, color=TEAL, bold=True)
         sets = defaultdict(list)
         for submission, result in scored:
@@ -86,21 +66,15 @@ class DashboardCharts:
         if kind == CHART_TYPES[0] and values:
             self.draw_histogram(values, width, height)
         elif kind == CHART_TYPES[1] and stats:
-            height = max(height, 90 + 30 * len(stats))
             self.draw_bars(stats, width, False)
         elif kind == CHART_TYPES[2] and stats:
-            width = max(width, 285 + 120 * len(names))
-            height = max(height, 90 + 30 * len(selected))
             self.draw_heatmap(sets, names, stats, selected)
         elif kind == CHART_TYPES[3] and values:
-            height = max(height, 93 + 37 * len(names))
             self.draw_boxes(sets, names, width, height)
         elif kind == CHART_TYPES[4] and stats:
-            height = max(height, 90 + 30 * len(stats))
             self.draw_bars(sorted(stats, key=lambda row: (-row[10], row[0])), width, True)
         else:
             self.text(20, 52, "No scored results for the current filters.", color=MUTED)
-        self.canvas.configure(scrollregion=(0, 0, width, height))
 
     def draw_histogram(self, values, width, height):
         bins = histogram(values)
@@ -112,7 +86,7 @@ class DashboardCharts:
             y = bottom - (bottom - top) * count / max(bins)
             if count:
                 fill = LOW if index < 5 else MID if index < 8 else FULL
-                self.rect(x0, y, x0 + bar_width, bottom, fill)
+                self.rect(x0 + 1, y, x0 + bar_width - 1, bottom, fill)
                 self.text(x0 + bar_width / 2, y - 11, str(count), "center")
         self.percent_axis(left, right, bottom)
 

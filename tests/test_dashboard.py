@@ -38,19 +38,18 @@ class TestDashboard(unittest.TestCase):
             Submission("One", "A.xlsx", 20, 46, {"Total Revenue": 2}),
             Submission("Two", "B.xlsx", 10, 46, {"Total Revenue": 0}),
         ]
-        chart = DashboardCharts.__new__(DashboardCharts)
-        chart.canvas = Mock()
-        chart.canvas.winfo_width.return_value = 900
-        chart.canvas.winfo_height.return_value = 350
-        chart.kind = Mock()
+        canvas = Mock()
+        chart = DashboardCharts(canvas)
+        scored = [(entries[0], 100), (entries[1], 0)]
+        selected = ("Total Revenue",)
+        stats = rubric_stats(entries, selected)
         for kind in CHART_TYPES:
             with self.subTest(kind=kind):
-                chart.canvas.reset_mock()
-                chart.kind.get.return_value = kind
-                chart.update([(entries[0], 100), (entries[1], 0)],
-                             rubric_stats(entries, ("Total Revenue",)), ("Total Revenue",))
-                chart.canvas.create_text.assert_called()
-                chart.canvas.configure.assert_called_once()
+                canvas.reset_mock()
+                width, height = chart.measure(kind, 680, scored, stats, selected)
+                chart.render(kind, width, height, scored, stats, selected)
+                canvas.create_text.assert_called()
+                canvas.create_rectangle.assert_called()
 
     def test_legacy_reports_and_missing_scores(self):
         with TemporaryDirectory() as folder:

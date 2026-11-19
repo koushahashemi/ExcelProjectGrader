@@ -9,7 +9,8 @@ from statistics import mean, median
 import tkinter as tk
 from tkinter import filedialog, ttk
 
-from dashboard_charts import BG, FULL, INK, LINE, LOW, MID, MUTED, TEAL, DashboardCharts
+from dashboard_charts import BG, FULL, INK, LOW, MID, MUTED, TEAL, histogram
+from dashboard_page import DashboardPage
 from grader import FORMAT, FORMULAS, GROUPS, MAXIMUM, RUBRIC, SETUP
 
 CATEGORIES = {
@@ -123,18 +124,28 @@ def rubric_stats(submissions, names):
 def dashboard(parent=None, paths=()):
     window = tk.Toplevel(parent) if parent is not None else tk.Tk()
     window.title("Excel Project Grader · Results Dashboard")
-    window.geometry("1160x760")
+    window.geometry("1380x820")
     window.minsize(880, 620)
     window.configure(background=BG)
-    style = ttk.Style(window)
-    style.configure("Dashboard.Treeview", rowheight=27, foreground=INK)
-    style.configure("Dashboard.Treeview.Heading", foreground=TEAL)
-    style.configure("Dashboard.TNotebook", background=BG)
+    banner = tk.Canvas(window, height=91, background=TEAL, highlightthickness=0)
+    banner.pack(fill="x")
 
-    header = tk.Frame(window, background=TEAL, padx=20, pady=12)
-    header.pack(fill="x")
-    tk.Label(header, text="Results Dashboard", background=TEAL, foreground="white",
-             font=("Segoe UI", 19, "bold")).pack(anchor="w")
+    def paint_banner(event):
+        banner.delete("all")
+        width = event.width
+        start, end = (6, 65, 64), (0, 121, 107)
+        for index in range(64):
+            color = "#" + "".join(f"{round(a + (b-a)*index/63):02x}" for a, b in zip(start, end))
+            banner.create_rectangle(width * index / 64, 0, width * (index + 1) / 64 + 1, 91,
+                                    fill=color, outline="")
+        for offset in (0, 38, 76):
+            banner.create_oval(width - 245 + offset, -80, width + 20 + offset, 175, outline="#378d7c")
+        banner.create_text(24, 35, text="Results Dashboard", fill="white", anchor="w",
+                           font=("Segoe UI", 22, "bold"))
+        banner.create_text(26, 66, text="Excel Project Grader", fill="#c3e9de", anchor="w",
+                           font=("Segoe UI", 10))
+
+    banner.bind("<Configure>", paint_banner)
 
     filters = tk.Frame(window, background=BG, padx=16, pady=10)
     filters.pack(fill="x")
@@ -154,56 +165,9 @@ def dashboard(parent=None, paths=()):
     tk.Label(window, textvariable=status, anchor="w", background=BG, foreground=MUTED,
              padx=16, wraplength=1000, justify="left").pack(fill="x")
 
-    cards = tk.Frame(window, background=BG, padx=16, pady=6)
-    cards.pack(fill="x")
-    indicators = {}
-    for title in ("Scored / loaded", "Minimum", "Maximum", "Average", "Median"):
-        card = tk.Frame(cards, background="white", highlightbackground=LINE, highlightthickness=1, padx=12, pady=5)
-        card.pack(side="left", fill="x", expand=True, padx=(0, 6))
-        value = tk.StringVar(window, value="—")
-        tk.Label(card, textvariable=value, background="white", foreground=TEAL,
-                 font=("Segoe UI", 18, "bold")).pack(anchor="w")
-        tk.Label(card, text=title, background="white", foreground=MUTED).pack(anchor="w")
-        indicators[title] = value
-
-    insight = tk.StringVar(window)
-    tk.Label(window, textvariable=insight, foreground=INK, background=MID, anchor="w",
-             padx=12, pady=5).pack(fill="x", padx=16, pady=(0, 5))
-    tabs = ttk.Notebook(window, style="Dashboard.TNotebook")
-    tabs.pack(fill="both", expand=True, padx=16, pady=(0, 12))
-
-    def table(tab, columns):
-        frame = ttk.Frame(tabs)
-        tabs.add(frame, text=tab)
-        tree = ttk.Treeview(frame, columns=[label for label, _ in columns], show="headings",
-                            style="Dashboard.Treeview")
-        for index, (label, width) in enumerate(columns):
-            tree.heading(label, text=label)
-            tree.column(label, width=width, minwidth=width, stretch=index == 0,
-                        anchor="w" if index == 0 else "center")
-        y = ttk.Scrollbar(frame, orient="vertical", command=tree.yview)
-        x = ttk.Scrollbar(frame, orient="horizontal", command=tree.xview)
-        tree.configure(yscrollcommand=y.set, xscrollcommand=x.set)
-        tree.grid(row=0, column=0, sticky="nsew")
-        y.grid(row=0, column=1, sticky="ns")
-        x.grid(row=1, column=0, sticky="ew")
-        frame.rowconfigure(0, weight=1)
-        frame.columnconfigure(0, weight=1)
-        for tag, color in (("full", FULL), ("mid", MID), ("low", LOW)):
-            tree.tag_configure(tag, background=color, foreground=INK)
-        return tree
-
-    charts_tab = ttk.Frame(tabs)
-    tabs.add(charts_tab, text="Charts")
-    charts = DashboardCharts(charts_tab)
-
-    rubric = table("Rubric statistics", [("Rubric item", 190), ("Max points", 75), ("Graded", 62),
-                                         ("Mean", 60), ("Min", 55), ("Max", 55), ("Full", 55),
-                                         ("Partial", 60), ("Zero", 55), ("Below full", 80), ("Points lost", 80)])
-    sets = table("Set comparison", [("Set", 220), ("Loaded", 90), ("Scored", 90), ("Minimum", 105),
-                                   ("Maximum", 105), ("Average", 105), ("Median", 105)])
-    distribution = table("Score distribution", [("Score range", 190), ("Submissions", 100), ("Share", 100)])
-    students = table("Submissions", [("Filename", 380), ("Set", 170), ("Filtered score", 115), ("Overall score", 115)])
+    zoom_controls = ttk.Frame(window, padding=(16, 0, 16, 4))
+    zoom_controls.pack(fill="x")
+    page = DashboardPage(window, zoom_controls)
 
     def percentage(value):
         return "—" if value is None else f"{value:.1f}%"
@@ -231,36 +195,33 @@ def dashboard(parent=None, paths=()):
         shown = [entry for entry in unique.values() if set_filter.get() == "All" or entry.set_name == set_filter.get()]
         scored = [(entry, entry.percent(selected)) for entry in shown]
         values = [value for _, value in scored if value is not None]
-        indicators["Scored / loaded"].set(f"{len(values)} / {len(shown)}")
-        for title, value in zip(("Minimum", "Maximum", "Average", "Median"), summary(values)):
-            indicators[title].set(value)
-        for tree in (rubric, sets, distribution, students):
-            tree.delete(*tree.get_children())
+        metrics = [f"{len(values)} / {len(shown)}", *summary(values)]
         stats = rubric_stats(shown, selected)
-        charts.update(scored, stats, selected)
+        tables = {title: [] for title in ("Rubric statistics", "Set comparison", "Score distribution", "Submissions")}
         for name, maximum, count, avg, low, high, full, partial, zero, below, lost in stats:
-            tag = "full" if below == 0 else "low" if below >= 50 else "mid"
-            rubric.insert("", "end", values=(name, maximum, count, f"{avg:.2f}", f"{low:g}", f"{high:g}",
-                                               full, partial, zero, percentage(below), f"{lost:g}"), tags=(tag,))
+            tint = FULL if below == 0 else LOW if below >= 50 else MID
+            tables["Rubric statistics"].append(((name, maximum, count, f"{avg:.2f}", f"{low:g}", f"{high:g}",
+                                                  full, partial, zero, percentage(below), f"{lost:g}"), tint))
         if stats and stats[0][9]:
-            insight.set(f"Most frequent deduction · {stats[0][0]} ({stats[0][9]:.1f}% below full marks)")
+            insight = f"Most frequent deduction · {stats[0][0]} ({stats[0][9]:.1f}% below full marks)"
         else:
-            insight.set("No deductions in the selected rubric results." if stats else "No rubric scores for the current filters.")
+            insight = ("No deductions in the selected rubric results." if stats
+                       else "No rubric scores for the current filters.")
         if duplicate_count := len(entries) - len(unique):
-            insight.set(f"{insight.get()} · {duplicate_count} duplicate record(s) collapsed")
+            insight += f" · {duplicate_count} duplicate record(s) collapsed"
         for name in sorted({entry.set_name for entry in shown}, key=str.casefold):
             batch = [value for entry, value in scored if entry.set_name == name]
             valid = [value for value in batch if value is not None]
-            sets.insert("", "end", values=(name, len(batch), len(valid), *summary(valid)))
-        for lower, upper, tag in ((0, 50, "low"), (50, 70, "low"), (70, 85, "mid"),
-                                   (85, 100, "mid"), (100, 101, "full")):
-            count = sum(lower <= value < upper for value in values)
-            label = "100%" if lower == 100 else f"{lower}% to under {upper}%"
-            distribution.insert("", "end", values=(label, count, percentage(100 * count / len(values) if values else None)),
-                                tags=(tag,))
+            tables["Set comparison"].append(((name, len(batch), len(valid), *summary(valid)), None))
+        for index, count in enumerate(histogram(values)):
+            lower, upper = 10 * index, 10 * (index + 1)
+            tint = LOW if index < 5 else MID if index < 8 else FULL
+            label = f"{lower}% to under {upper}%" if index < 9 else "90% to 100%"
+            tables["Score distribution"].append(((label, count, percentage(100 * count / len(values) if values else None)), tint))
         for entry, value in sorted(scored, key=lambda pair: (pair[0].set_name.casefold(), pair[0].filename.casefold())):
             total = "—" if entry.total is None else f"{entry.total:g}/{entry.maximum:g}"
-            students.insert("", "end", values=(entry.filename, entry.set_name, percentage(value), total))
+            tables["Submissions"].append(((entry.filename, entry.set_name, percentage(value), total), None))
+        page.update(metrics, insight, scored, stats, selected, tables)
 
     def open_paths(paths):
         errors = []
