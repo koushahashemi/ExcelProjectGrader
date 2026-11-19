@@ -7,7 +7,7 @@ from typing import NamedTuple
 
 from openpyxl.utils.cell import range_boundaries
 
-from grader import Detail, WORKBOOK_SUFFIXES, day, detail_sheet, key, load_pair
+from grader import WORKBOOK_SUFFIXES, day, key, load_pair, select_detail
 
 TRANSACTION_FIELDS = ("Order ID", "Country", "Order Date", "Ship Date",
                       "Units Sold", "Unit Price", "Unit Cost")
@@ -26,8 +26,8 @@ def workbook_file(path):
 def snapshot(path):
     book, cached = load_pair(path)
     try:
-        sheet = detail_sheet(book)
-        detail = Detail(sheet, cached[sheet.title])
+        detail, _ = select_detail(book, cached)
+        sheet = detail.sheet
         rows = defaultdict(list)
         data_rows = detail.rows
         table = next((table for table in sheet.tables.values() if key(table.name) == "detailtable"), None)

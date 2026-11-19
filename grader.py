@@ -13,7 +13,7 @@ from openpyxl.utils.cell import range_boundaries, get_column_letter
 from openpyxl.utils.datetime import from_excel
 from openpyxl.styles.numbers import is_date_format
 
-VERSION = "1.2.1"
+VERSION = "1.5.0"
 WORKBOOK_SUFFIXES = {".xlsx", ".xlsm"}
 TITLE = "Excel Project Grader"
 COURSE = "BSYS-1000 · Individual Project (Excel) · Fall 2026"
@@ -723,137 +723,168 @@ def pivot_checks(sheet, cached, group, expected, detail):
     return best
 
 
+def chart_type_ok(chart, group):
+    layers = chart._charts
+    if group == "Bar":
+        return len(layers) == 1 and type(chart).__name__ == "BarChart" and getattr(chart, "grouping", None) in {"clustered", None}
+    if group == "Line":
+        return len(layers) == 1 and type(chart).__name__ == "LineChart"
+    return (len(layers) == 2 and any(type(layer).__name__ == "LineChart" for layer in layers)
+            and any(type(layer).__name__ == "BarChart" and layer.type == "col"
+                    and layer.grouping in {"clustered", None} for layer in layers))
+
+
+def chart_candidate_items(cached, detail, group, expected, sheet, chart):
+    title = CHARTS[group][0]
+    target = f"{group} Chart"
+    expected_count = sum(len(values) for values in expected.values())
+    group_index = GROUPS.index(group)
+    index = 13 + group_index * 4
+    location = sheet.title if sheet is not None else target
+    data = list(series_data(chart, cached)) if chart else []
+    matrix, captured, unresolved = chart_matrix(data, expected, group)
+    matches, count, differences = compare_summary(matrix, expected)
+    chart_refs = "\n".join(f"{kind}: {label!s} · categories {categories or '(embedded)'} · values {values or '(embedded)'}"
+                           for kind, label, _, _, categories, values in data)
+    table = (aggregate_tables(sheet, cached[sheet.title], expected, group)
+             if sheet is not None and hasattr(sheet, "_cells") else (0, 0, [], "", False, []))
+    table_matches, _, table_diffs, address, formulas, examples = table
+    full_table = bool(expected_count and table_matches == expected_count and not table_diffs)
+    line_sorted = True
+    if group == "Line":
+        for _, _, categories, _, _, _ in data:
+            years = [category_key(value, group) for value in categories if value is not None]
+            line_sorted = line_sorted and years == sorted(years)
+    aggregation = 2 if full_table and formulas and line_sorted else 1 if table_matches or matches or formulas else 0
+    issues = []
+    if not address:
+        issues.append(f"Could not identify a separate {group.lower()} summary table on {location}.")
+    elif not full_table:
+        details = f" {table_diffs[0]}." if table_diffs else ""
+        issues.append(f"Only {table_matches} of {expected_count} expected summary values match DetailTable.{details}")
+    if address and not formulas:
+        issues.append(f"No aggregation formulas were found in {address}.")
+    if not line_sorted:
+        issues.append("Sort the years in ascending order in the plotted source data.")
+    yield rubric_item(index, aggregation, address or location, f"Formula-based {group.lower()} summary of DetailTable (task 11)",
+                      f"{table_matches}/{expected_count} summary cells matched; {matches}/{expected_count} plotted cells matched; chronological order: {line_sorted}\n"
+                      + "\n".join(examples[:12] + table_diffs[:12]),
+                      " ".join(issues),
+                      "The workbook cannot prove whether the student used filters or copied the data as instructed.")
+    correct_type = bool(chart and chart_type_ok(chart, group))
+    correct_data = bool(count and matches == count and not differences and not unresolved)
+    # An upstream arithmetic mistake belongs to aggregation when the chart faithfully
+    # plots the complete summary range with the right categories and series.
+    expected_positions = {(label, metric) for label, metrics in expected.items() for metric in metrics}
+    follows_summary = bool(address and expected_positions == matrix.keys() and all(
+        number_ref and similar(number_ref.rsplit("!", 1)[0].strip("'"), location)
+        for _, _, _, _, _, number_ref in data))
+    correct_data = correct_data or follows_summary
+    if correct_data and group == "Combo":
+        correct_data = all((metric_label(label, {"Units Sold", "Days to Fulfil"}) == "Units Sold") ==
+                           (kind == "BarChart") for kind, label, *_ in data)
+    chart_score = 2 if correct_type and correct_data and chart.legend else 1 if chart and (correct_type or matches) else 0
+    chart_issues = []
+    if not chart:
+        chart_issues.append(f"Create the {group.lower()} chart on {location}.")
+    else:
+        if not correct_type:
+            chart_issues.append(f"Use the required {group.lower()} chart type.")
+        if not correct_data:
+            chart_issues.append(f"The plotted series or values differ from the required data ({matches}/{count} values match).")
+        if not chart.legend:
+            chart_issues.append("Add a chart legend.")
+    yield rubric_item(index+1, chart_score, location, f"{group} chart with the required series, data and legend (task 11)",
+                      (chart_refs or "No suitable chart") + f"\nType matches: {correct_type}; legend: {bool(chart and chart.legend)}; {captured} plotted values\n"
+                      + "\n".join(differences[:12]), " ".join(chart_issues),
+                      "Some chart source values could not be read from saved ranges or caches." if chart and not captured else "")
+    title_issues = []
+    if not sheet or not similar(sheet.title, target):
+        title_issues.append(f"sheet name: expected {target}")
+    if not chart or not similar(chart_title(chart.title), title):
+        title_issues.append(f"chart title: {chart_title(chart.title) if chart else 'missing'}")
+    for axis, label in (("x_axis", "horizontal/category axis title"), ("y_axis", "vertical/value axis title")):
+        if not chart or not chart_title(getattr(getattr(chart, axis, None), "title", None)):
+            title_issues.append(label)
+    if group == "Bar" and chart:
+        axes = [getattr(chart, axis, None) for axis in ("x_axis", "y_axis")]
+        units = any(getattr(axis, "dispUnits", None) or currency(str(getattr(axis, "numFmt", "")))
+                    or currency(chart_title(getattr(axis, "title", None))) for axis in axes)
+        if not units:
+            title_issues.append("currency or display units")
+    yield rubric_item(index+2, bands(title_issues) if chart else 0, location, f'{target} · “{title}” · appropriate axis titles and units (task 11)',
+                      "; ".join(title_issues) or "Required labels present",
+                      "Correct the following: " + "; ".join(title_issues) + "." if chart else "Add the chart and its required labels.",
+                      "Axis title wording and visual readability may need instructor review." if chart else "")
+    pivot_score, pivot_evidence, review, pivot_feedback = pivot_checks(sheet, cached[sheet.title] if sheet else None, group, expected, detail)
+    yield rubric_item(index+3, pivot_score, location, "PivotTable mirrors the source summary with appropriate value settings (task 12)",
+                      pivot_evidence, pivot_feedback, review)
+
+
+
 def chart_items(book, cached, detail):
     used = set()
-    for group_index, group in enumerate(GROUPS):
-        title, category, fields = CHARTS[group]
-        expected = summary(detail, group)
-        expected_count = sum(len(values) for values in expected.values())
+    for group in GROUPS:
         target = f"{group} Chart"
-        named = sheet_named(book, target)
+        title = CHARTS[group][0]
         other_titles = [CHARTS[other][0] for other in GROUPS if other != group]
         other_sheets = [f"{other} Chart" for other in GROUPS if other != group]
-        charts = [(s, c) for s in book for c in getattr(s, "_charts", []) if id(c) not in used
-                  and (similar(chart_title(c.title), title) or
-                       (not any(similar(chart_title(c.title), name) for name in other_titles)
-                        and not any(similar(s.title, name) for name in other_sheets)))]
+        expected = summary(detail, group)
+        metrics = {field for bucket in expected.values() for field in bucket}
+        candidates = []
+        for sheet in book:
+            named = similar(sheet.title, target)
+            other_sheet = any(similar(sheet.title, name) for name in other_sheets)
+            for chart in sheet._charts:
+                right_title = similar(chart_title(chart.title), title)
+                other_title = any(similar(chart_title(chart.title), name) for name in other_titles)
+                if id(chart) in used or other_title or (other_sheet and not right_title):
+                    continue
+                matching_series = chart_type_ok(chart, group) and any(
+                    metric_label(label, metrics) for _, label, *_ in series_data(chart, cached))
+                if named or right_title or matching_series:
+                    candidates.append((sheet, chart))
+            if named or (not other_sheet and not sheet._charts and sheet is not detail.sheet
+                         and hasattr(sheet, "_cells")):
+                candidates.append((sheet, None))
 
-        def type_ok(chart):
-            layers = chart._charts
-            if group == "Bar":
-                return len(layers) == 1 and type(chart).__name__ == "BarChart" and getattr(chart, "grouping", None) in {"clustered", None}
-            if group == "Line":
-                return len(layers) == 1 and type(chart).__name__ == "LineChart"
-            return (len(layers) == 2 and any(type(layer).__name__ == "LineChart" for layer in layers)
-                    and any(type(layer).__name__ == "BarChart" and layer.type == "col"
-                            and layer.grouping in {"clustered", None} for layer in layers))
-
-        candidate = max(charts, key=lambda pair: (similar(chart_title(pair[1].title), title), pair[0] is named,
-                                                  type_ok(pair[1])), default=None)
-        if candidate and not (candidate[0] is named or type_ok(candidate[1]) or similar(chart_title(candidate[1].title), title)):
-            candidate = None
-        sheet, chart = candidate or (named, None)
-        if chart:
-            used.add(id(chart))
-        index = 13 + group_index * 4
-        location = sheet.title if sheet is not None else target
-        data = list(series_data(chart, cached)) if chart else []
-        matrix, captured, unresolved = chart_matrix(data, expected, group)
-        matches, count, differences = compare_summary(matrix, expected)
-        chart_refs = "\n".join(f"{kind}: {label!s} · categories {categories or '(embedded)'} · values {values or '(embedded)'}"
-                               for kind, label, _, _, categories, values in data)
-        summaries = []
-        lookup_sheets = [sheet] if sheet is not None and hasattr(sheet, "_cells") else []
-        if named is not None and hasattr(named, "_cells") and named is not sheet:
-            lookup_sheets.append(named)
-        for summary_sheet in lookup_sheets:
-            summaries.append(aggregate_tables(summary_sheet, cached[summary_sheet.title], expected, group))
-        table_matches, _, table_diffs, address, formulas, examples = max(summaries,
-            key=lambda item: (item[0], item[4], item[1]), default=(0, 0, [], "", False, []))
-        full_table = bool(expected_count and table_matches == expected_count and not table_diffs)
-        line_sorted = True
-        if group == "Line":
-            for _, _, categories, _, _, _ in data:
-                years = [category_key(value, group) for value in categories if value is not None]
-                line_sorted = line_sorted and years == sorted(years)
-        aggregation = 2 if full_table and formulas and line_sorted else 1 if table_matches or matches or formulas else 0
-        issues = []
-        if not address:
-            issues.append(f"Could not identify a separate {group.lower()} summary table on {location}.")
-        elif not full_table:
-            details = f" {table_diffs[0]}." if table_diffs else ""
-            issues.append(f"Only {table_matches} of {expected_count} expected summary values match DetailTable.{details}")
-        if address and not formulas:
-            issues.append(f"No aggregation formulas were found in {address}.")
-        if not line_sorted:
-            issues.append("Sort the years in ascending order in the plotted source data.")
-        yield rubric_item(index, aggregation, address or location, f"Formula-based {group.lower()} summary of DetailTable (task 11)",
-                          f"{table_matches}/{expected_count} summary cells matched; {matches}/{expected_count} plotted cells matched; chronological order: {line_sorted}\n"
-                          + "\n".join(examples[:12] + table_diffs[:12]),
-                          " ".join(issues),
-                          "The workbook cannot prove whether the student used filters or copied the data as instructed.")
-        correct_type = bool(chart and type_ok(chart))
-        correct_data = bool(count and matches == count and not differences and not unresolved)
-        # An upstream arithmetic mistake belongs to aggregation when the chart faithfully
-        # plots the complete summary range with the right categories and series.
-        expected_positions = {(label, metric) for label, metrics in expected.items() for metric in metrics}
-        follows_summary = bool(address and expected_positions == matrix.keys() and all(
-            number_ref and similar(number_ref.rsplit("!", 1)[0].strip("'"), location)
-            for _, _, _, _, _, number_ref in data))
-        correct_data = correct_data or follows_summary
-        if correct_data and group == "Combo":
-            correct_data = all((metric_label(label, {"Units Sold", "Days to Fulfil"}) == "Units Sold") ==
-                               (kind == "BarChart") for kind, label, *_ in data)
-        chart_score = 2 if correct_type and correct_data and chart.legend else 1 if chart and (correct_type or matches) else 0
-        chart_issues = []
-        if not chart:
-            chart_issues.append(f"Create the {group.lower()} chart on {location}.")
+        best_rank = (-1,)
+        for sheet, chart in candidates:
+            items = list(chart_candidate_items(cached, detail, group, expected, sheet, chart))
+            if chart is None and not similar(sheet.title, target) and not items[0]["score"]:
+                continue
+            rank = (sum(item["score"] for item in items), items[1]["score"], items[0]["score"],
+                    bool(chart and similar(chart_title(chart.title), title)), similar(sheet.title, target))
+            if rank > best_rank:
+                best_rank, best_chart, best_items = rank, chart, items
+        if best_rank == (-1,):
+            yield from chart_candidate_items(cached, detail, group, expected, None, None)
         else:
-            if not correct_type:
-                chart_issues.append(f"Use the required {group.lower()} chart type.")
-            if not correct_data:
-                chart_issues.append(f"The plotted series or values differ from the required data ({matches}/{count} values match).")
-            if not chart.legend:
-                chart_issues.append("Add a chart legend.")
-        yield rubric_item(index+1, chart_score, location, f"{group} chart with the required series, data and legend (task 11)",
-                          (chart_refs or "No suitable chart") + f"\nType matches: {correct_type}; legend: {bool(chart and chart.legend)}; {captured} plotted values\n"
-                          + "\n".join(differences[:12]), " ".join(chart_issues),
-                          "Some chart source values could not be read from saved ranges or caches." if chart and not captured else "")
-        title_issues = []
-        if not sheet or not similar(sheet.title, target):
-            title_issues.append(f"sheet name: expected {target}")
-        if not chart or not similar(chart_title(chart.title), title):
-            title_issues.append(f"chart title: {chart_title(chart.title) if chart else 'missing'}")
-        for axis, label in (("x_axis", "horizontal/category axis title"), ("y_axis", "vertical/value axis title")):
-            if not chart or not chart_title(getattr(getattr(chart, axis, None), "title", None)):
-                title_issues.append(label)
-        if group == "Bar" and chart:
-            axes = [getattr(chart, axis, None) for axis in ("x_axis", "y_axis")]
-            units = any(getattr(axis, "dispUnits", None) or currency(str(getattr(axis, "numFmt", "")))
-                        or currency(chart_title(getattr(axis, "title", None))) for axis in axes)
-            if not units:
-                title_issues.append("currency or display units")
-        yield rubric_item(index+2, bands(title_issues) if chart else 0, location, f'{target} · “{title}” · appropriate axis titles and units (task 11)',
-                          "; ".join(title_issues) or "Required labels present",
-                          "Correct the following: " + "; ".join(title_issues) + "." if chart else "Add the chart and its required labels.",
-                          "Axis title wording and visual readability may need instructor review." if chart else "")
-        pivot_score, pivot_evidence, review, pivot_feedback = pivot_checks(sheet, cached[sheet.title] if sheet else None, group, expected, detail)
-        yield rubric_item(index+3, pivot_score, location, "PivotTable mirrors the source summary with appropriate value settings (task 12)",
-                          pivot_evidence, pivot_feedback, review)
-
+            if best_chart is not None:
+                used.add(id(best_chart))
+            yield from best_items
 
 def level(total):
     return "Level 4" if total >= 42 else "Level 3" if total >= 34 else "Level 2" if total >= 26 else "Poor"
 
 
-def detail_sheet(book):
-    named = sheet_named(book, "Detail")
-    if named is not None and len(header_map(named)[1]) >= 4:
-        return named
-    return max(book.worksheets, key=lambda sheet: (
-        any(key(table) == "detailtable" for table in sheet.tables),
-        len(header_map(sheet)[1]),
-    ))
+def select_detail(book, cached):
+    """Score each transaction-sheet candidate as a unit."""
+    best = None
+    for sheet in book.worksheets:
+        detail = Detail(sheet, cached[sheet.title])
+        if (len(detail.columns) < 4 or "Country" not in detail.columns
+                or not {"Order ID", "Order Date", "Ship Date"} & detail.columns.keys()):
+            continue
+        items = setup_items(book, detail) + format_items(detail) + list(formula_items(detail))
+        rank = (sum(item["score"] for item in items), items[6]["score"],
+                sum(item["score"] for item in items[7:]), len(detail.columns),
+                len(detail.rows), similar(sheet.title, "Detail"))
+        if best is None or rank > best[0]:
+            best = rank, detail, items
+    if best is None:
+        raise ValueError("Could not identify the assignment transaction headers.")
+    return best[1], best[2]
 
 
 def grade(path):
@@ -864,11 +895,9 @@ def grade(path):
             raise ValueError("Select an .xlsx or .xlsm workbook.")
         book, cached = load_pair(path)
         try:
-            sheet = detail_sheet(book)
-            detail = Detail(sheet, cached[sheet.title])
-            if len(detail.columns) < 4:
-                raise ValueError("Could not identify the assignment transaction headers.")
-            items = setup_items(book, detail) + format_items(detail) + list(formula_items(detail))
+            detail, items = select_detail(book, cached)
+            sheet = detail.sheet
+            result["detail_sheet"] = sheet.title
             items.extend(chart_items(book, cached, detail))
             total = sum(item["score"] for item in items)
             advisories = []

@@ -12,9 +12,10 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 from tkinter.scrolledtext import ScrolledText
 
+from dashboard import dashboard
 from batch_tools import compare_workbooks, similarity_groups, trim_filenames, workbook_file
 from grader import COURSE, MAXIMUM, RUBRIC, TITLE, VERSION, grade
-from reports import benchmark, details, export_report, feedback, flag_labels, item_feedback, score_rows
+from reports import benchmark, details, export_filename, export_report, feedback, flag_labels, item_feedback, score_rows
 
 GROUP_COLORS = ("#d7ebff", "#dcf4dc", "#f1ddff", "#ffdcca", "#d1f4f2", "#ffd9e6",
                 "#e8efc7", "#dce0ff", "#f5dfce", "#d8e9e1", "#e9dce9", "#d5e4ec")
@@ -59,14 +60,19 @@ class App:
         ttk.Button(actions, text="Add folder…", command=self.folder).pack(side="left", padx=5)
         self.clear_button = ttk.Button(actions, text="Clear batch", command=self.clear)
         self.clear_button.pack(side="left")
-        ttk.Button(actions, text="Export grades CSV…", command=lambda: self.save("csv")).pack(side="right")
-        ttk.Button(actions, text="Save student feedback…", command=lambda: self.save("feedback")).pack(side="right", padx=5)
-        report = ttk.Menubutton(actions, text="Save instructor report")
+        exports = ttk.Frame(frame)
+        exports.pack(fill="x", pady=(6, 0))
+        self.set_name = tk.StringVar(root)
+        ttk.Label(exports, text="Set name").pack(side="left", padx=(0, 5))
+        ttk.Entry(exports, textvariable=self.set_name, width=22).pack(side="left")
+        ttk.Button(exports, text="Export grades CSV…", command=lambda: self.save("csv")).pack(side="left", padx=(10, 0))
+        ttk.Button(exports, text="Save student feedback…", command=lambda: self.save("feedback")).pack(side="left", padx=5)
+        report = ttk.Menubutton(exports, text="Save instructor report")
         menu = tk.Menu(report, tearoff=False)
         for title, kind in (("Formatted HTML", "html"), ("Plain text", "txt"), ("JSON evidence", "json")):
             menu.add_command(label=title, command=lambda kind=kind: self.save(kind))
         report["menu"] = menu
-        report.pack(side="right")
+        report.pack(side="left")
 
         utilities = ttk.Frame(frame)
         utilities.pack(fill="x", pady=(5, 0))
@@ -74,6 +80,7 @@ class App:
         self.compare_button.pack(side="left")
         self.rename_button = ttk.Button(utilities, text="Trim filenames…", command=self.rename_dialog)
         self.rename_button.pack(side="left", padx=5)
+        ttk.Button(utilities, text="Results dashboard…", command=lambda: dashboard(self.root)).pack(side="left", padx=5)
 
         self.progress = ttk.Progressbar(frame, mode="indeterminate")
         self.progress.pack(fill="x", pady=(10, 5))
@@ -389,12 +396,13 @@ class App:
         if not self.results:
             messagebox.showinfo("No submissions", "Add submissions before exporting.")
             return
+        set_name = self.set_name.get().strip()
         suffix = "txt" if kind == "feedback" else kind
         path = filedialog.asksaveasfilename(defaultextension=f".{suffix}", filetypes=[(suffix.upper(), f"*.{suffix}")],
-                                            initialfile=f"excel-grader-{kind}.{suffix}")
+                                            initialfile=export_filename(kind, set_name))
         if path:
             try:
-                export_report(path, self.results, kind)
+                export_report(path, self.results, kind, set_name)
                 self.status.set(f"Saved {Path(path).name}")
             except OSError as error:
                 messagebox.showerror("Could not save report", str(error))
@@ -404,8 +412,13 @@ def main():
     parser = argparse.ArgumentParser(description=TITLE)
     parser.add_argument("workbooks", nargs="*")
     parser.add_argument("--benchmark", type=Path)
+    parser.add_argument("--dashboard", action="store_true", help="Open the results dashboard. Positional paths are reports.")
+    parser.add_argument("--set-name", default="", help="Name to embed in a JSON grading export.")
     parser.add_argument("--json", type=Path, help="Grade without opening the desktop and save JSON evidence.")
     args = parser.parse_args()
+    if args.dashboard:
+        dashboard(paths=args.workbooks).mainloop()
+        return
     if args.benchmark:
         output = json.dumps(benchmark(args.benchmark, grade), ensure_ascii=False, indent=2)
         if args.json:
@@ -414,7 +427,7 @@ def main():
             print(output)
         return
     if args.json:
-        export_report(args.json, [grade(path) for path in args.workbooks], "json")
+        export_report(args.json, [grade(path) for path in args.workbooks], "json", args.set_name)
         return
     from tkinterdnd2 import DND_FILES, TkinterDnD
     root = TkinterDnD.Tk()

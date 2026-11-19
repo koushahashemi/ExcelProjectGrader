@@ -11,7 +11,7 @@ from openpyxl.pivot.table import DataField, Location, RowColField, TableDefiniti
 from openpyxl.worksheet.table import Table
 
 from grader import COUNTRY_ROWS, MAXIMUM, RUBRIC, formula_matches, grade
-from reports import benchmark, export_report
+from reports import benchmark, export_report, html_report
 
 
 def submission(path):
@@ -137,6 +137,56 @@ class TestGrader(unittest.TestCase):
             local_pivot = outcome["items"][16]
             self.assertEqual(local_pivot["score"], 2, local_pivot)
             self.assertIn("transaction copy on the chart worksheet", local_pivot["detected"])
+
+    def test_grades_more_complete_detail_and_chart(self):
+        with TemporaryDirectory() as root:
+            path = Path(root, "Sales Data Duplicate.xlsx")
+            submission(path)
+            book = load_workbook(BytesIO(path.read_bytes()))
+            book["Detail"].title = "Completed transactions"
+            draft = book.copy_worksheet(book["Completed transactions"])
+            draft.title = "Detail"
+            for col in ("M", "N", "O", "P", "Q"):
+                draft[f"{col}2"] = None
+            old_bar = book["Bar Chart"]
+            old_bar._charts.clear()
+            incomplete = BarChart()
+            incomplete.title = "Financial Performance by Region"
+            old_bar.add_chart(incomplete, "H1")
+            finished = book.create_sheet("Question 11a")
+            finished.append(["Region", "Total Revenue", "Total Cost", "Total Profit"])
+            finished.append(["Asia", 250, 50, 200])
+            bar = BarChart()
+            bar.title = "Financial Performance by Region"
+            bar.x_axis.title = "Region"
+            bar.y_axis.title = "USD ($)"
+            bar.add_data(Reference(finished, min_col=2, max_col=4, min_row=1, max_row=2), titles_from_data=True)
+            bar.set_categories(Reference(finished, min_col=1, min_row=2, max_row=2))
+            finished.add_chart(bar, "H1")
+            book.save(path)
+            book.close()
+
+            result = grade(path)
+            self.assertEqual(result.get("detail_sheet"), "Completed transactions", result)
+            self.assertEqual(result["items"][7]["score"], 2)
+            self.assertEqual(result["items"][14]["score"], 2)
+            self.assertEqual(result["items"][14]["location"], "Question 11a")
+
+    def test_html_lists_similarity_groups_after_summary(self):
+        results = [{"filename": name, "source_path": name, "status": "Error", "error": "Fixture"}
+                   for name in ("A&.xlsx", "B.xlsx")]
+        self.assertNotIn("Similar submissions", html_report(results))
+        from unittest.mock import patch
+
+        for result, peer in zip(results, reversed(results)):
+            result["similarity"] = [{"peer": peer["source_path"]}]
+        with patch("reports.flag_details", return_value=""):
+            page = html_report(results)
+        self.assertLess(page.index("Class summary"), page.index("Similar submissions"))
+        self.assertLess(page.index("Similar submissions"), page.index('class="student"'))
+        group_table = page.split('<section class="similarity">')[1].split("</section>")[0]
+        self.assertIn('Group 1', group_table)
+        self.assertIn('<a href="#s0">A&amp;.xlsx</a><br><a href="#s1">B.xlsx</a>', group_table)
 
     def test_exports_and_benchmark(self):
         with TemporaryDirectory() as root:

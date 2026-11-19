@@ -2,9 +2,11 @@
 import csv
 from html import escape
 import json
+import re
 from pathlib import Path
 from statistics import mean
 
+from batch_tools import similarity_groups
 from grader import COURSE, MAXIMUM, RUBRIC, TITLE, VERSION
 
 
@@ -84,11 +86,20 @@ def score_rows(results):
                *([""] * len(RUBRIC) if "error" in result else [])]
 
 
-def export_scores(path, results):
+def export_filename(kind, set_name="", suffix=None):
+    suffix = suffix or ("txt" if kind == "feedback" else kind)
+    safe_name = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "-", set_name.strip()).strip(" .")
+    qualifier = f"-{safe_name[:100].rstrip(' .')}" if safe_name else ""
+    return f"excel-grader{qualifier}-{kind}.{suffix}"
+
+
+def export_scores(path, results, set_name=""):
     with Path(path).open("w", encoding="utf-8-sig", newline="") as stream:
         writer = csv.writer(stream)
-        writer.writerow(["Filename", f"Total /{MAXIMUM}", "Status", "Instructor flags", *[f"{name} /{points}" for name, points in RUBRIC]])
-        writer.writerows([csv_value(value) for value in row] for row in score_rows(results))
+        header = ["Filename", f"Total /{MAXIMUM}", "Status", "Instructor flags", *[f"{name} /{points}" for name, points in RUBRIC]]
+        writer.writerow(header + (["Set name"] if set_name else []))
+        for row in score_rows(results):
+            writer.writerow([csv_value(value) for value in [*row, *([set_name] if set_name else [])]])
 
 
 WORD_REPORT_CSS = r'''
@@ -206,7 +217,23 @@ def html_submission(index, result):
             f'<div class="evidence"><h3>Technical evidence</h3>{evidence}</div></section>')
 
 
-def html_report(results):
+def html_similarity_groups(results):
+    groups = similarity_groups(results)
+    if not groups:
+        return ""
+    entries = {}
+    for index, result in enumerate(results):
+        group = groups.get(result.get("source_path"))
+        if group is not None:
+            entries.setdefault(group, []).append(f'<a href="#s{index}">{escape(result["filename"])}</a>')
+    rows = "".join(f'<tr><th scope="row">Group {group}</th><td class="name">'
+                   + "<br>".join(names) + "</td></tr>" for group, names in entries.items())
+    return ('<section class="similarity"><h2>Similar submissions</h2><div class="tablewrap">'
+            '<table class="grid"><thead><tr><th>Group</th><th>Files</th></tr></thead>'
+            f'<tbody>{rows}</tbody></table></div></section>')
+
+
+def html_report(results, set_name=""):
     totals = [result["total"] for result in results if "total" in result]
     average = f"{mean(totals):.1f}" if totals else "—"
     marked = sum(bool(result.get("marker")) for result in results)
@@ -248,7 +275,7 @@ for (const button of document.querySelectorAll('.copy')) {
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Excel Project Grading Report</title><style>{WORD_REPORT_CSS}</style></head><body>
 <header id="top"><h1>BCIT Excel Project Grader — Grading Report</h1>
-<p>{COURSE} · Instructor Grading Tool · Engine {VERSION}</p></header>
+<p>{COURSE} · Instructor Grading Tool · Engine {VERSION}</p>{f"<p>Set name · {escape(set_name)}</p>" if set_name else ""}</header>
 <main><section class="summary"><h2>Class summary</h2><div class="stats">
 <div><b>{len(results)}</b><span>submissions</span></div><div><b>{average}</b><span>average / {MAXIMUM}</span></div>
 <div><b>{marked}</b><span>added sentence flagged</span></div></div>
@@ -256,25 +283,29 @@ for (const button of document.querySelectorAll('.copy')) {
 </tr></thead><tbody>{''.join(rows)}</tbody></table></div>
 <p class="legend"><span class="sc full">Full</span> full marks <span class="sc mid">Partial</span> some issues
 <span class="sc low">0</span> major issues. Click a name to jump to that student.</p></section>
-{''.join(sections)}</main><script>{script}</script></body></html>"""
+{html_similarity_groups(results)}{''.join(sections)}</main><script>{script}</script></body></html>"""
 
 
-def export_report(path, results, kind):
+def export_report(path, results, kind, set_name=""):
     path = Path(path)
+    set_name = set_name.strip()
     if kind == "csv":
-        export_scores(path, results)
+        export_scores(path, results, set_name)
         return
     if kind == "feedback":
         content = "\n\n" + ("\n\n" + "─" * 50 + "\n\n").join(feedback(result) for result in results)
         content = content.strip() + "\n"
     elif kind == "html":
-        content = html_report(results)
+        content = html_report(results, set_name)
     elif kind == "json":
         content = json.dumps({"course": COURSE, "version": VERSION, "maximum": MAXIMUM,
-                              "submissions": results}, ensure_ascii=False, indent=2)
+                              "submissions": results, **({"set_name": set_name} if set_name else {})},
+                             ensure_ascii=False, indent=2)
     else:
         content = f"{TITLE} · {COURSE} · v{VERSION}\n\n" + "\n\n".join(
             f"{feedback(result)}\n\nINSTRUCTOR EVIDENCE\n{details(result)}" for result in results)
+    if set_name and kind in {"feedback", "txt"}:
+        content = f"Set name · {set_name}\n\n{content}"
     path.write_text(content, encoding="utf-8")
 
 

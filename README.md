@@ -24,6 +24,14 @@ Excel’s saved data, formulas, metadata and caches are used as evidence. Common
 
 **Trim filenames** opens a dialog for selecting workbooks or a folder. It removes the prefix through the first underscore, preserves the extension and skips collisions. Review the dialog’s result for any skipped files.
 
+## Results dashboard
+
+Enter a **Set name** before exporting a batch. Each export includes the set name in its suggested filename and in the report. Use the same set name when exporting CSV and JSON from the same batch.
+
+Open **Results dashboard** from the grader or run `Open Results Dashboard.bat` next to `Install and Run.bat`. You can also launch it without opening the grader with `ExcelProjectGrader.exe --dashboard` or `python dashboard.py`.
+
+Load several grader CSV or JSON reports together. Filter by set, category, or individual rubric item. The score cards and set comparison use percentages for the selected items. The rubric table ranks items by the share of graded submissions below full marks and shows full, partial and zero counts. Use the distribution and submissions tabs to inspect how scores vary. Missing scores and grading errors are excluded from averages. Reports without a set name use the report filename, and duplicate submission names within a set count once.
+
 ## Development and calibration
 
 Use the existing isolated cloud checkout. From the repository root run:
