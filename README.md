@@ -10,7 +10,7 @@ From a source checkout, install Python 3.12 including Tcl/Tk and the Python laun
 
 ## Grading
 
-Drop .xlsx or .xlsm workbooks into the window, select individual or multiple files, or choose a folder. Select a submission to see rubric scores and feedback. Select a rubric item for technical evidence. Double-click the filename to open the original workbook. Grading reads the workbooks without launching Excel, executing macros, updating external links, or saving changes to submissions.
+Drop .xlsx or .xlsm workbooks into the window, select individual or multiple files, or choose a folder. Select a submission to see rubric scores and feedback. Select a rubric item for technical evidence. Double-click the filename to open the original workbook. Right-click a submission for **Open file**, **Remove from list**, or **Regrade**. Regrading replaces that row’s result and clears its previous similarity matches. Grading reads the workbooks without launching Excel, executing macros, updating external links, or saving changes to submissions.
 
 Export the class grade table as CSV. Save the student feedback separately as text. HTML, text and JSON instructor reports include technical evidence and may contain student data or local file paths.
 
@@ -30,7 +30,7 @@ Enter a **Set name** before exporting a batch. Each export includes the set name
 
 Open **Results dashboard** from the grader or run `Open Results Dashboard.bat` next to `Install and Run.bat`. You can also launch it without opening the grader with `ExcelProjectGrader.exe --dashboard` or `python dashboard.py`.
 
-Load several grader CSV or JSON reports together. Filter by set, category, or individual rubric item. The score cards and set comparison use percentages for the selected items. The rubric table ranks items by the share of graded submissions below full marks and shows full, partial and zero counts. Use the distribution and submissions tabs to inspect how scores vary. Missing scores and grading errors are excluded from averages. Reports without a set name use the report filename, and duplicate submission names within a set count once.
+Load several grader CSV or JSON reports together. Filter by set, category, or individual rubric item. The score cards and set comparison use percentages for the selected items. The rubric table ranks items by the share of graded submissions below full marks and shows full, partial and zero counts. The **Charts** tab offers a score histogram, stacked rubric outcomes, a set-by-rubric heatmap, box plots by set, and points lost by item. Each chart follows the active filters. Missing scores and grading errors are excluded from averages. Reports without a set name use the report filename, and duplicate submission names within a set count once.
 
 ## Development and calibration
 

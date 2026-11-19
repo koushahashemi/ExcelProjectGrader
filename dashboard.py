@@ -9,6 +9,7 @@ from statistics import mean, median
 import tkinter as tk
 from tkinter import filedialog, ttk
 
+from dashboard_charts import BG, FULL, INK, LINE, LOW, MID, MUTED, TEAL, DashboardCharts
 from grader import FORMAT, FORMULAS, GROUPS, MAXIMUM, RUBRIC, SETUP
 
 CATEGORIES = {
@@ -19,8 +20,6 @@ CATEGORIES = {
 }
 POINTS = dict(RUBRIC)
 ALIASES = {"DetailTable": "Excel Table Creation"}
-TEAL, BG, INK, MUTED, LINE = "#00796B", "#f6f8f9", "#1d2327", "#5f6b72", "#dde3e6"
-FULL, MID, LOW = "#e3f3ee", "#fff3d6", "#fde4e1"
 
 
 @dataclass
@@ -194,6 +193,10 @@ def dashboard(parent=None, paths=()):
             tree.tag_configure(tag, background=color, foreground=INK)
         return tree
 
+    charts_tab = ttk.Frame(tabs)
+    tabs.add(charts_tab, text="Charts")
+    charts = DashboardCharts(charts_tab)
+
     rubric = table("Rubric statistics", [("Rubric item", 190), ("Max points", 75), ("Graded", 62),
                                          ("Mean", 60), ("Min", 55), ("Max", 55), ("Full", 55),
                                          ("Partial", 60), ("Zero", 55), ("Below full", 80), ("Points lost", 80)])
@@ -234,6 +237,7 @@ def dashboard(parent=None, paths=()):
         for tree in (rubric, sets, distribution, students):
             tree.delete(*tree.get_children())
         stats = rubric_stats(shown, selected)
+        charts.update(scored, stats, selected)
         for name, maximum, count, avg, low, high, full, partial, zero, below, lost in stats:
             tag = "full" if below == 0 else "low" if below >= 50 else "mid"
             rubric.insert("", "end", values=(name, maximum, count, f"{avg:.2f}", f"{low:g}", f"{high:g}",

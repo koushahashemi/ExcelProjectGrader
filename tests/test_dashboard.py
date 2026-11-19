@@ -1,8 +1,10 @@
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
+from unittest.mock import Mock
 
-from dashboard import POINTS, read_report, rubric_stats
+from dashboard import POINTS, Submission, read_report, rubric_stats
+from dashboard_charts import CHART_TYPES, DashboardCharts, box_summary, histogram
 from grader import grade
 from reports import export_filename, export_report
 from test_grader import submission
@@ -27,6 +29,28 @@ class TestDashboard(unittest.TestCase):
             self.assertEqual(entries[0], entries[1])
             self.assertEqual(entries[0].set_name, "Section A/B")
             self.assertEqual(entries[0].percent(POINTS), 100 * result["total"] / 46)
+
+    def test_charts_draw_filtered_scores_and_handle_boundaries(self):
+        self.assertEqual(histogram([0, 9.99, 10, 90, 100]), [2, 1, 0, 0, 0, 0, 0, 0, 0, 2])
+        self.assertEqual(box_summary([50]), (50, 50, 50, 50, 50, []))
+        self.assertEqual(box_summary([0, 60, 60, 70, 70])[-1], [0])
+        entries = [
+            Submission("One", "A.xlsx", 20, 46, {"Total Revenue": 2}),
+            Submission("Two", "B.xlsx", 10, 46, {"Total Revenue": 0}),
+        ]
+        chart = DashboardCharts.__new__(DashboardCharts)
+        chart.canvas = Mock()
+        chart.canvas.winfo_width.return_value = 900
+        chart.canvas.winfo_height.return_value = 350
+        chart.kind = Mock()
+        for kind in CHART_TYPES:
+            with self.subTest(kind=kind):
+                chart.canvas.reset_mock()
+                chart.kind.get.return_value = kind
+                chart.update([(entries[0], 100), (entries[1], 0)],
+                             rubric_stats(entries, ("Total Revenue",)), ("Total Revenue",))
+                chart.canvas.create_text.assert_called()
+                chart.canvas.configure.assert_called_once()
 
     def test_legacy_reports_and_missing_scores(self):
         with TemporaryDirectory() as folder:

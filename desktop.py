@@ -96,6 +96,13 @@ class App:
         self.batch.bind("<<TreeviewSelect>>", self.select_submission)
         self.batch.bind("<Double-1>", self.open_workbook)
         self.batch.bind("<Return>", self.open_workbook)
+        self.file_menu = tk.Menu(self.batch, tearoff=False)
+        self.file_menu.add_command(label="Open file", command=self.open_workbook)
+        self.file_menu.add_command(label="Remove from list", command=self.remove_submission)
+        self.file_menu.add_command(label="Regrade", command=self.regrade_submission)
+        self.batch.bind("<Button-3>", self.show_file_menu)
+        self.batch.bind("<Shift-F10>", self.show_file_menu)
+        self.batch.bind("<Menu>", self.show_file_menu)
         lower = ttk.Frame(panes, padding=(0, 10, 0, 0))
         panes.add(lower, weight=3)
         self.selection = ttk.Label(lower, text="Select a submission to inspect its rubric scores.")
@@ -169,6 +176,9 @@ class App:
             if candidates:
                 self.status.set("No new .xlsx or .xlsm submissions found.")
             return
+        self.start_grading(workbooks)
+
+    def start_grading(self, workbooks):
         if not self.remaining:
             self.progress.start()
         self.remaining += len(workbooks)
@@ -187,12 +197,19 @@ class App:
         try:
             while True:
                 result = self.queue.get_nowait()
-                index = len(self.results)
-                self.results.append(result)
-                self.pending.discard(Path(result["source_path"]))
+                path = result["source_path"]
+                index = next((index for index, prior in enumerate(self.results) if prior["source_path"] == path), None)
+                self.pending.discard(Path(path))
                 self.remaining -= 1
-                self.batch.insert("", "end", iid=str(index), values=next(score_rows([result])),
-                                  tags=self.result_tags(result))
+                if index is None:
+                    index = len(self.results)
+                    self.results.append(result)
+                    self.batch.insert("", "end", iid=str(index), values=next(score_rows([result])),
+                                      tags=self.result_tags(result))
+                else:
+                    self.discard_similarity(path)
+                    self.results[index] = result
+                    self.refresh_rows()
                 if not self.batch.selection():
                     self.batch.selection_set(str(index))
                 if self.remaining:
@@ -363,8 +380,58 @@ class App:
                 self.feedback.tag_add("focused", start, end)
                 self.feedback.yview(start)
 
-    def open_workbook(self, event):
-        if event.keysym != "Return":
+    def show_file_menu(self, event):
+        if event.num == 3:
+            row = self.batch.identify_row(event.y)
+            x, y = event.x_root, event.y_root
+        else:
+            selection = self.batch.selection()
+            row = selection[0] if selection else ""
+            box = self.batch.bbox(row) if row else ()
+            x = self.batch.winfo_rootx() + (box[0] if box else 0)
+            y = self.batch.winfo_rooty() + (box[1] + box[3] if box else 0)
+        if not row:
+            return "break"
+        self.batch.selection_set(row)
+        self.batch.focus(row)
+        state = "disabled" if self.remaining or self.comparing else "normal"
+        for label in ("Remove from list", "Regrade"):
+            self.file_menu.entryconfigure(label, state=state)
+        try:
+            self.file_menu.tk_popup(x, y)
+        finally:
+            self.file_menu.grab_release()
+        return "break"
+
+    def discard_similarity(self, path):
+        for result in self.results:
+            if "similarity" in result:
+                result["similarity"] = [match for match in result["similarity"] if match["peer"] != path]
+
+    def remove_submission(self):
+        selected = self.batch.selection()
+        if not selected or self.remaining or self.comparing:
+            return
+        index = int(selected[0])
+        removed = self.results.pop(index)
+        self.discard_similarity(removed["source_path"])
+        if not self.results:
+            self.clear()
+        else:
+            self.batch.delete(*self.batch.get_children())
+            for row in range(len(self.results)):
+                self.batch.insert("", "end", iid=str(row))
+            self.batch.selection_set(str(min(index, len(self.results) - 1)))
+            self.refresh_rows()
+        self.status.set(f"Removed {removed['filename']} from the list.")
+
+    def regrade_submission(self):
+        result = self.selected()
+        if result and not self.remaining and not self.comparing:
+            self.start_grading([Path(result["source_path"])])
+
+    def open_workbook(self, event=None):
+        if event is not None and event.keysym != "Return":
             row = self.batch.identify_row(event.y)
             if not row or self.batch.identify_column(event.x) != "#1":
                 return
