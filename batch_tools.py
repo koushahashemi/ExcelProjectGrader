@@ -78,6 +78,33 @@ def compare_workbooks(paths):
     return flags, errors
 
 
+def similarity_groups(results):
+    """Assign one group to each connected set of directly matched submissions."""
+    peers = {result["source_path"]: set() for result in results}
+    for result in results:
+        path = result["source_path"]
+        for match in result.get("similarity", []):
+            peer = match["peer"]
+            if peer in peers and peer != path:
+                peers[path].add(peer)
+                peers[peer].add(path)
+
+    groups = {}
+    group = 0
+    for path, matched in peers.items():
+        if not matched or path in groups:
+            continue
+        group += 1
+        pending = [path]
+        groups[path] = group
+        while pending:
+            for peer in peers[pending.pop()]:
+                if peer not in groups:
+                    groups[peer] = group
+                    pending.append(peer)
+    return groups
+
+
 def trim_filenames(paths):
     """Remove the prefix through the first underscore without overwriting files."""
     renamed, skipped = {}, []

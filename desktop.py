@@ -1,5 +1,6 @@
 """Instructor desktop interface for Excel Project Grader."""
 import argparse
+from colorsys import hls_to_rgb
 import json
 import os
 from pathlib import Path
@@ -11,9 +12,21 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 from tkinter.scrolledtext import ScrolledText
 
-from batch_tools import compare_workbooks, trim_filenames, workbook_file
+from batch_tools import compare_workbooks, similarity_groups, trim_filenames, workbook_file
 from grader import COURSE, MAXIMUM, RUBRIC, TITLE, VERSION, grade
 from reports import benchmark, details, export_report, feedback, flag_labels, item_feedback, score_rows
+
+GROUP_COLORS = ("#d7ebff", "#dcf4dc", "#f1ddff", "#ffdcca", "#d1f4f2", "#ffd9e6",
+                "#e8efc7", "#dce0ff", "#f5dfce", "#d8e9e1", "#e9dce9", "#d5e4ec")
+
+
+def group_color(group):
+    if group <= len(GROUP_COLORS):
+        return GROUP_COLORS[group - 1]
+    hue = ((group - len(GROUP_COLORS)) * 0.61803398875) % 1
+    rgb = hls_to_rgb(hue, 0.83, 0.70)
+    return "#" + "".join(f"{round(channel * 255):02x}" for channel in rgb)
+
 
 EXCEL_FILES = [("Excel workbooks", ("*.xlsx", "*.xlsm"))]
 
@@ -188,14 +201,23 @@ class App:
         self.root.after(75, self.poll)
 
     @staticmethod
-    def result_tags(result):
+    def result_tags(result, group=None):
+        if group is not None:
+            return (f"similarity-{group}",)
         if flag_labels(result):
             return ("flag",)
         return ("deduction",) if "error" in result else ()
 
     def refresh_rows(self):
+        groups = similarity_groups(self.results)
+        for group in sorted(set(groups.values())):
+            self.batch.tag_configure(f"similarity-{group}", background=group_color(group), foreground="#202020")
         for index, result in enumerate(self.results):
-            self.batch.item(str(index), values=next(score_rows([result])), tags=self.result_tags(result))
+            group = groups.get(result["source_path"])
+            values = next(score_rows([result]))
+            if group is not None:
+                values[3] += f" · Group {group}"
+            self.batch.item(str(index), values=values, tags=self.result_tags(result, group))
         self.select_submission()
 
     def compare(self):

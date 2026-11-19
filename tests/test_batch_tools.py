@@ -7,7 +7,7 @@ import unittest
 
 from openpyxl import load_workbook
 
-from batch_tools import compare_workbooks, trim_filenames
+from batch_tools import compare_workbooks, similarity_groups, trim_filenames
 from grader import format_ok, formula_matches, grade
 from reports import export_report
 from test_grader import submission
@@ -106,6 +106,19 @@ class TestVersion110(unittest.TestCase):
             self.assertTrue((root / "Sales Data.xlsx").exists())
             self.assertTrue((root / "Subset.xlsx").exists())
 
+
+    def test_distinct_similarity_groups(self):
+        results = [
+            {"source_path": path, "similarity": [{"peer": peer} for peer in peers]}
+            for path, peers in (("a", ["b"]), ("b", ["a", "c"]), ("c", ["b"]),
+                                ("d", ["e"]), ("e", ["d"]), ("f", []))
+        ]
+        self.assertEqual(similarity_groups(results), {"a": 1, "b": 1, "c": 1, "d": 2, "e": 2})
+        from desktop import App, group_color
+
+        self.assertEqual(App.result_tags(results[0], 1), App.result_tags(results[1], 1))
+        self.assertNotEqual(group_color(1), group_color(2))
+        self.assertEqual(App.result_tags({"marker": "Z1"}), ("flag",))
 
     def test_comparison_strict_threshold_ignores_metadata(self):
         with TemporaryDirectory() as directory:
