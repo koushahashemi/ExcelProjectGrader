@@ -87,8 +87,53 @@ def score_rows(results):
 def export_scores(path, results):
     with Path(path).open("w", encoding="utf-8-sig", newline="") as stream:
         writer = csv.writer(stream)
-        writer.writerow(["Filename", f"Total /{MAXIMUM}", "Status", "Instructor flags", *[f"{name} /{points}" for name, points in RUBRIC]])
-        writer.writerows([csv_value(value) for value in row] for row in score_rows(results))
+        writer.writerow(["Submission", *[name for name, _ in RUBRIC], "Total", "Maximum", "Status", "Instructor flags"])
+        for result in results:
+            if "error" in result:
+                row = [result["filename"], *([""] * len(RUBRIC)), "", "", f"Error: {result['error']}"]
+            else:
+                row = [result["filename"], *[item["score"] for item in result["items"]],
+                       result["total"], MAXIMUM, result["status"]]
+            writer.writerow([csv_value(value) for value in [*row, flag_labels(result)]])
+
+
+def student_report(result):
+    if "error" in result:
+        return f"{result['filename']}\n{feedback(result)}"
+    lines = [TITLE, COURSE, f"Feedback on lost marks — {result['filename']}", f"Total: {result['total']}/{MAXIMUM}", ""]
+    deductions = [item for item in result["items"] if item["score"] < item["maximum"]]
+    if not deductions:
+        lines.append("No marks lost in this submission.")
+    for item in deductions:
+        lost = item["maximum"] - item["score"]
+        unit = "mark" if lost == 1 else "marks"
+        lines.extend([f"{item['name']}: {item['score']}/{item['maximum']} ({lost} {unit} lost)",
+                      f"• {item['feedback']} Location: {item['location']}", ""])
+    lines.extend(f"• Assignment advisory · {note}" for note in result["advisories"])
+    return "\n".join(lines).rstrip()
+
+
+def instructor_report(result):
+    if "error" in result:
+        return "\n".join(filter(None, [result["filename"], result["error"], flag_details(result)]))
+    estimated = " (estimated)" if result["status"] == "Review suggested" else ""
+    lines = [TITLE, COURSE, f"{result['filename']}: {result['total']}/{MAXIMUM}{estimated}",
+             f"Engine {result['version']}", f"Scoring: Automatic · {result['level']}", ""]
+    for item in result["items"]:
+        outcome = ("FAIL" if item["score"] < item["maximum"] else
+                   "UNVERIFIED" if item["review"] else "PASS")
+        lines.extend([f"{item['name']}: {item['score']}/{item['maximum']}",
+                      f"  [{outcome}] {item['name']} — {item['location']}",
+                      f"    Expected: {item['expected']}",
+                      "    Found: " + item["detected"].replace("\n", "\n    ")])
+        if item["review"]:
+            lines.append(f"    Instructor review: {item['review']}")
+        lines.append("")
+    if result["advisories"]:
+        lines.extend(["Assignment advisories (no separate rubric points)", *result["advisories"], ""])
+    if flags := flag_details(result):
+        lines.extend(["Instructor flags (no separate rubric points)", flags])
+    return "\n".join(lines).rstrip()
 
 
 def html_report(results):
@@ -102,8 +147,8 @@ def html_report(results):
         sections.append(f'<section id="submission-{index}"><h2>{escape(result["filename"])}</h2>'
                         f'<label for="feedback-{index}">Student feedback</label>'
                         f'<button type="button" data-feedback="feedback-{index}">Copy feedback</button>'
-                        f'<textarea id="feedback-{index}" readonly rows="7">{escape(feedback(result))}</textarea>'
-                        f'<details><summary>Instructor evidence</summary><pre>{escape(details(result))}</pre></details></section>')
+                        f'<textarea id="feedback-{index}" readonly rows="7">{escape(student_report(result))}</textarea>'
+                        f'<details><summary>Instructor evidence</summary><pre>{escape(instructor_report(result))}</pre></details></section>')
     headings = "".join(f'<th scope="col">{escape(name)}</th>' for name in
                        ["Submission", "Total", "Status", "Instructor flags", *[f"{name} /{maximum}" for name, maximum in RUBRIC]])
     return f"""<!doctype html>
@@ -138,16 +183,13 @@ def export_report(path, results, kind):
         export_scores(path, results)
         return
     if kind == "feedback":
-        content = "\n\n" + ("\n\n" + "─" * 50 + "\n\n").join(feedback(result) for result in results)
-        content = content.strip() + "\n"
+        content = "\n\n".join(student_report(result) for result in results)
     elif kind == "html":
         content = html_report(results)
     elif kind == "json":
-        content = json.dumps({"course": COURSE, "version": VERSION, "maximum": MAXIMUM,
-                              "submissions": results}, ensure_ascii=False, indent=2)
+        content = json.dumps([{"maximum": MAXIMUM, **result} for result in results], ensure_ascii=False, indent=2)
     else:
-        content = f"{TITLE} · {COURSE} · v{VERSION}\n\n" + "\n\n".join(
-            f"{feedback(result)}\n\nINSTRUCTOR EVIDENCE\n{details(result)}" for result in results)
+        content = "\n\n".join(instructor_report(result) for result in results)
     path.write_text(content, encoding="utf-8")
 
 
