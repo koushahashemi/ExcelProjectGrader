@@ -13,7 +13,7 @@ from openpyxl.utils.cell import range_boundaries, get_column_letter
 from openpyxl.utils.datetime import from_excel
 from openpyxl.styles.numbers import is_date_format
 
-VERSION = "1.7.0"
+VERSION = "1.8.0"
 WORKBOOK_SUFFIXES = {".xlsx", ".xlsm"}
 TITLE = "Excel Project Grader"
 COURSE = "BSYS-1000 · Individual Project (Excel) · Fall 2026"
@@ -373,7 +373,7 @@ def formula_items(detail):
                     "Ship Date − Order Date", 'IF with AND: critical (C) and more than 14 days → Delayed, otherwise On time',
                     "Exact-match VLOOKUP or XLOOKUP of Country returning the three-character ISO code"]
     for offset, (name, expected_text) in enumerate(zip(FORMULAS, expectations)):
-        good, uncertain, errors, fmt = [], [], [], []
+        good, uncertain, errors, fmt, harmless = [], [], [], [], []
         seen_required = 0
         for row in detail.rows:
             cell = detail.cell(row, name)
@@ -392,7 +392,13 @@ def formula_items(detail):
                 if not matched or expected is None:
                     uncertain.append(row)
                 if not format_ok(cell, name, value):
-                    fmt.append(row)
+                    # Numeric formats leave text unchanged unless they provide a
+                    # custom text section that overrides its normal display.
+                    if name == "Order Status" and cache_correct and isinstance(value, str) and (
+                            len(cell.number_format.split(";")) < 4 or cell.number_format.split(";")[3].strip() == "@"):
+                        harmless.append(row)
+                    else:
+                        fmt.append(row)
             else:
                 errors.append((row, f"{cell.coordinate if cell else 'Missing column'}: {formula or value!s} → {value!s}; expected {expected!s}"))
                 if formula and required and (value is None or cache_correct) and not matched:
@@ -406,6 +412,8 @@ def formula_items(detail):
         full = bool(good) and not (errors or fmt or position_issue)
         score = 2 if full else 1 if good or (name in {"Order Status", "ISO Codes"} and seen_required) else 0
         detected = f"{len(good)}/{len(detail.rows)} rows supported; {len(fmt)} format issues"
+        if harmless:
+            detected += f"; {len(harmless)} correctly displayed text results with a non-text format (no deduction)"
         if position_issue:
             detected += "; column is out of position"
         if errors:
@@ -622,18 +630,30 @@ def aggregate_tables(sheet, cached, expected, group):
 
 def pivot_source_kind(source, chart_sheet, detail):
     if source is None:
-        return ""
+        return "", "The PivotTable source could not be identified."
     name = key(source.name)
     if name and any(key(table) == name for table in detail.sheet.tables):
-        return "main transaction table"
+        return "main transaction table", ""
     if source.ref and similar(source.sheet, detail.sheet.title):
         left, top, right, bottom = range_boundaries(source.ref)
         if None not in (left, top, right, bottom) and top == detail.header and bottom > top:
-            return "main transaction range"
-    if (name and any(key(table) == name for table in getattr(chart_sheet, "tables", {}))
-            or source.ref and similar(source.sheet, chart_sheet.title)):
-        return "transaction copy on the chart worksheet"
-    return ""
+            return "main transaction range", ""
+    local_table = next((table for table in getattr(chart_sheet, "tables", {}).values()
+                        if name and key(table.name) == name), None)
+    ref = local_table.ref if local_table else source.ref if similar(source.sheet, chart_sheet.title) else None
+    if ref:
+        left, top, right, bottom = range_boundaries(ref)
+        left, top, right, bottom = left or 1, top or 1, right or 16384, bottom or 1048576
+        for output in chart_sheet._pivots:
+            pl, pt, pr, pb = range_boundaries(output.location.ref)
+            if left <= pr and pl <= right and top <= pb and pt <= bottom:
+                return "", f"The source range {chart_sheet.title}!{ref} includes PivotTable output and cannot reliably refresh."
+        cells = [cell for cell in chart_sheet._cells.values()
+                 if top <= cell.row <= bottom and left <= cell.column <= right and cell.value is not None]
+        if any(cell.row == top for cell in cells) and any(cell.row > top for cell in cells):
+            return "transaction copy on the chart worksheet", ""
+        return "", f"The source range {chart_sheet.title}!{ref} has no usable transaction data."
+    return "", "The PivotTable source could not be verified."
 
 
 def pivot_checks(sheet, cached, group, expected, detail):
@@ -645,7 +665,7 @@ def pivot_checks(sheet, cached, group, expected, detail):
         fields = [field.name for field in cache.cacheFields] if cache else []
         source = cache.cacheSource.worksheetSource if cache and cache.cacheSource else None
         source_text = (source.name or f"{source.sheet}!{source.ref}") if source else "Unknown"
-        source_kind = pivot_source_kind(source, sheet, detail)
+        source_kind, source_issue = pivot_source_kind(source, sheet, detail)
         values = [(fields[f.fld] if 0 <= f.fld < len(fields) else f.fld, f.subtotal, f.numFmtId)
                   for f in (pivot.dataFields or [])]
         location = pivot.location.ref
@@ -710,14 +730,16 @@ def pivot_checks(sheet, cached, group, expected, detail):
             evidence += "\n" + "\n".join(differences[:12])
         review = "Pivot layout or displayed values could not be fully confirmed." if settings and not matrix else ""
         issues = []
-        if not source_kind:
-            issues.append("Use DetailTable or the copied transactions on this chart worksheet as the PivotTable source.")
+        if source_issue:
+            issues.append(source_issue + " Use DetailTable or a copied transaction range instead.")
         if not settings:
             issues.append("Correct the PivotTable grouping or value-field aggregation.")
         if not count or matches != count or differences:
             issues.append(f"The saved PivotTable matches {matches} of {count} expected summary values.")
         if not formats:
-            issues.append("Use Currency or Accounting in the PivotTable value field settings.")
+            issues.append("Set the PivotTable value fields to Currency or Accounting.")
+        if issues and count and matches == count and not differences:
+            issues.insert(0, f"All {count} saved summary values are correct.")
         if score > best[0]:
             best = score, evidence, review, " ".join(issues)
     return best
@@ -750,11 +772,11 @@ def chart_candidate_items(cached, detail, group, expected, sheet, chart):
              if sheet is not None and hasattr(sheet, "_cells") else (0, 0, [], "", False, []))
     table_matches, _, table_diffs, address, formulas, examples = table
     full_table = bool(expected_count and table_matches == expected_count and not table_diffs)
-    line_sorted = True
-    if group == "Line":
-        for _, _, categories, _, _, _ in data:
-            years = [category_key(value, group) for value in categories if value is not None]
-            line_sorted = line_sorted and years == sorted(years)
+    labels = [[category_key(value, group) for value in categories if value is not None]
+              for _, _, categories, _, _, _ in data]
+    line_axis_wrong = group == "Line" and any(
+        not re.fullmatch(r"[1-9]\d{3}", label) for series in labels for label in series)
+    line_sorted = not line_axis_wrong and (group != "Line" or all(series == sorted(series) for series in labels))
     aggregation = 2 if full_table and formulas and line_sorted else 1 if table_matches or matches or formulas else 0
     issues = []
     if not address:
@@ -764,7 +786,7 @@ def chart_candidate_items(cached, detail, group, expected, sheet, chart):
         issues.append(f"Only {table_matches} of {expected_count} expected summary values match DetailTable.{details}")
     if address and not formulas:
         issues.append(f"No aggregation formulas were found in {address}.")
-    if not line_sorted:
+    if group == "Line" and not line_axis_wrong and not line_sorted:
         issues.append("Sort the years in ascending order in the plotted source data.")
     yield rubric_item(index, aggregation, address or location, f"Formula-based {group.lower()} summary of DetailTable (task 11)",
                       f"{table_matches}/{expected_count} summary cells matched; {matches}/{expected_count} plotted cells matched; chronological order: {line_sorted}\n"
@@ -780,20 +802,49 @@ def chart_candidate_items(cached, detail, group, expected, sheet, chart):
         number_ref and similar(number_ref.rsplit("!", 1)[0].strip("'"), location)
         for _, _, _, _, _, number_ref in data))
     correct_data = correct_data or follows_summary
-    if correct_data and group == "Combo":
-        correct_data = all((metric_label(label, {"Units Sold", "Days to Fulfil"}) == "Units Sold") ==
-                           (kind == "BarChart") for kind, label, *_ in data)
-    chart_score = 2 if correct_type and correct_data and chart.legend else 1 if chart and (correct_type or matches) else 0
     chart_issues = []
+    significant = line_axis_wrong
+    grand_total = group == "Bar" and any(label in {"grandtotal", "total"} for label, _ in matrix)
     if not chart:
         chart_issues.append(f"Create the {group.lower()} chart on {location}.")
     else:
         if not correct_type:
             chart_issues.append(f"Use the required {group.lower()} chart type.")
-        if not correct_data:
+        if line_axis_wrong:
+            found = list(dict.fromkeys(str(value) for _, _, cats, _, _, _ in data for value in cats
+                                      if value is not None and not re.fullmatch(r"[1-9]\d{3}", category_key(value, group))))
+            chart_issues.append(f"Use years on the horizontal axis and separate lines for sales channels. Found {', '.join(found[:5])} on the horizontal axis.")
+        if grand_total:
+            correct_data = False
+            chart_issues.append("Exclude the Grand Total row from the chart.")
+        if group == "Combo":
+            allowed = {"c", "h", "m", "l"}
+            extra = sorted({label for series in labels for label in series} - allowed)
+            repeated = any(len(set(series)) < len(series) for series in labels)
+            correct_layers = (len(data) == 2 and
+                              {(kind, metric_label(label, {"Units Sold", "Days to Fulfil"})) for kind, label, *_ in data}
+                              == {("BarChart", "Units Sold"), ("LineChart", "Days to Fulfil")})
+            if not correct_layers:
+                chart_issues.append("Plot Units Sold as columns and Average Days to Fulfil as the only line.")
+            if extra or repeated:
+                message = "Use one horizontal-axis category per priority (C, H, M and L)."
+                if extra:
+                    message += " Extra categories: " + ", ".join(label.upper() if label else "(blank)" for label in extra) + "."
+                if repeated:
+                    message += " Priority labels appear more than once."
+                chart_issues.append(message)
+            axis_ids = {axis.axId for layer in chart._charts if (axis := getattr(layer, "y_axis", None)) is not None}
+            secondary = correct_type and len(axis_ids) > 1
+            if correct_type and not secondary:
+                chart_issues.append("Put the Average Days to Fulfil line on a secondary vertical axis.")
+            correct_data = correct_data and correct_layers and not (extra or repeated) and secondary
+        if not correct_data and not line_axis_wrong and (matches != count or unresolved or
+                                                        (differences and not grand_total)):
             chart_issues.append(f"The plotted series or values differ from the required data ({matches}/{count} values match).")
         if not chart.legend:
             chart_issues.append("Add a chart legend.")
+    chart_score = (0 if significant else 2 if correct_type and correct_data and chart.legend else
+                   1 if chart and (correct_type or matches) else 0)
     yield rubric_item(index+1, chart_score, location, f"{group} chart with the required series, data and legend (task 11)",
                       (chart_refs or "No suitable chart") + f"\nType matches: {correct_type}; legend: {bool(chart and chart.legend)}; {captured} plotted values\n"
                       + "\n".join(differences[:12]), " ".join(chart_issues),

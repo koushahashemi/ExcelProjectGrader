@@ -138,6 +138,20 @@ class TestGrader(unittest.TestCase):
             self.assertEqual(local_pivot["score"], 2, local_pivot)
             self.assertIn("transaction copy on the chart worksheet", local_pivot["detected"])
 
+            book = load_workbook(BytesIO(path.read_bytes()))
+            bar_sheet = book["Bar Chart"]
+            bar_sheet._pivots[0].cache.cacheSource.worksheetSource = WorksheetSource(
+                ref="A1:D1048576", sheet="Bar Chart")
+            book["Line Chart"]["A2"] = "Online"
+            book.save(path)
+            book.close()
+            outcome = grade(path)
+            self.assertEqual(outcome["items"][16]["score"], 1)
+            self.assertIn("includes PivotTable output", outcome["items"][16]["feedback"])
+            self.assertEqual(outcome["items"][18]["score"], 0)
+            self.assertIn("Found Online on the horizontal axis", outcome["items"][18]["feedback"])
+
+
     def test_grades_more_complete_detail_and_chart(self):
         with TemporaryDirectory() as root:
             path = Path(root, "Sales Data Duplicate.xlsx")
