@@ -2,6 +2,8 @@
 
 Windows desktop grader for the BSYS-1000 Individual Project (Excel), Fall 2026. It evaluates 25 rubric items out of 46 and assigns the rubric’s overall level.
 
+The [Assets](Assets/) folder contains the supplied project instructions, rubric, sales data generator, and country codes workbook.
+
 ## Windows
 
 Download `ExcelProjectGrader.exe` from GitHub Releases and open it. The standalone build bundles Python and its dependencies. If you also download `Install and Run.bat`, place both files together and open the batch file to launch the app.

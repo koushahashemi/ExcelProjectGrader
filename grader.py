@@ -13,12 +13,14 @@ from openpyxl.utils.cell import range_boundaries, get_column_letter
 from openpyxl.utils.datetime import from_excel
 from openpyxl.styles.numbers import is_date_format
 
-VERSION = "1.8.0"
+VERSION = "1.8.1"
 WORKBOOK_SUFFIXES = {".xlsx", ".xlsm"}
 TITLE = "Excel Project Grader"
 COURSE = "BSYS-1000 · Individual Project (Excel) · Fall 2026"
 SETUP = ("CountryCodes import", "Hide Parameters", "Unique countries", "Adjacent dates")
 FORMAT = ("Column widths", "Data types", "Excel Table Creation")
+INITIAL_TYPE_COLUMNS = {"Region", "Country", "Item Type", "Sales Channel", "Order Priority",
+                        "Order Date", "Order ID", "Ship Date", "Units Sold", "Unit Price", "Unit Cost"}
 FORMULAS = ("Total Revenue", "Total Cost", "Total Profit", "Days to Fulfil", "Order Status", "ISO Codes")
 GROUPS = ("Bar", "Line", "Combo")
 RUBRIC = [(name, 1) for name in SETUP] + [(name, 2) for name in FORMAT + FORMULAS]
@@ -323,7 +325,7 @@ def display_width(cell, value, name):
 
 def format_items(detail):
     sheet = detail.sheet
-    narrow, mistyped = [], []
+    narrow, mistyped = [], {}
     for name, column in detail.columns.items():
         header = sheet.cell(detail.header, column)
         default = sheet.sheet_format.defaultColWidth or 8.43
@@ -332,19 +334,19 @@ def format_items(detail):
         if any(not cell.alignment.wrap_text and not cell.alignment.shrink_to_fit
                and display_width(cell, value, name) > available + 1.5 for cell, value in samples):
             narrow.append(f"{header.column_letter} ({name}, width {available:g})")
-        if name in FORMULAS:
-            continue  # Formula formatting is scored in its own item.
+        if name not in INITIAL_TYPE_COLUMNS:
+            continue
         invalid = []
         for cell, value in samples[1:]:
             valid = value is not None and format_ok(cell, name, value)
-            if name in MONEY | {"Units Sold", "Order ID"}:
+            if name in {"Order ID", "Units Sold", "Unit Price", "Unit Cost"}:
                 valid = valid and numeric(value)
             if name in {"Order Date", "Ship Date"}:
                 valid = valid and day(value, sheet.parent.epoch) is not None
             if not valid:
                 invalid.append(cell.coordinate)
         if invalid:
-            mistyped.append(f"{name}: {', '.join(invalid[:6])}")
+            mistyped[name] = invalid
     tables = list(sheet.tables.values())
     table = next((t for t in tables if key(t.name) == "detailtable"), tables[0] if tables else None)
     proper = False
@@ -359,9 +361,10 @@ def format_items(detail):
                     "Widen these columns on " + sheet.title + ": " + "; ".join(narrow) + "." if narrow else
                     "" if detail.rows else "No transaction rows were available to check column widths.",
                     "Excel rendering depends on fonts and display settings. Widths are estimated from saved column settings."),
-        rubric_item(5, bands(mistyped) if detail.rows else 0, sheet.title, "Appropriate dates, numeric types and currency (task 1)",
-                    "; ".join(mistyped) or "No base-column type problems detected",
-                    "Correct the value types or formats in " + "; ".join(mistyped) + "." if mistyped else
+        rubric_item(5, bands(mistyped) if detail.rows else 0, sheet.title, "Appropriate data types for the initial transaction columns (task 1)",
+                    "; ".join(f"{name}: {', '.join(cells[:6])}" for name, cells in mistyped.items())
+                    or "No initial-column type problems detected",
+                    "Incorrect data types or formats: " + ", ".join(mistyped) + "." if mistyped else
                     "" if detail.rows else "No transaction rows were available to check data types."),
         rubric_item(6, 2 if proper else 1 if table else 0, sheet.title, "DetailTable covers the transaction data (task 2)",
                     ", ".join(f"{t.name} {t.ref}" for t in tables) or "No Excel table", "Create or correct DetailTable and its data range."),

@@ -54,14 +54,21 @@ class TestVersion110(unittest.TestCase):
             book = load_workbook(BytesIO(dodgy.read_bytes()))
             detail = book["Detail"]
             detail["K2"].number_format = "0.00E+00"
+            detail["G2"].number_format = "General"
             detail["Q2"].number_format = "0.00"
+            detail["J2"].number_format = "0%"
+            detail["L2"].number_format = "General"
             detail.column_dimensions["B"].width = 3
             book.save(dodgy)
             book.close()
             result = grade(dodgy)
             self.assertNotIn("error", result, result)
             items = {item["name"]: item for item in result["items"]}
-            self.assertEqual(items["Data types"]["score"], 1)
+            self.assertEqual(items["Data types"]["score"], 0)
+            self.assertEqual(items["Data types"]["feedback"],
+                             "Incorrect data types or formats: Order Date, Units Sold, Unit Price, Unit Cost.")
+            self.assertIn("G2", items["Data types"]["detected"])
+            self.assertNotIn("Order Status", items["Data types"]["detected"])
             self.assertEqual(items["Order Status"]["score"], 1)
             self.assertIn("B (Country", items["Column widths"]["feedback"])
             self.assertIn("Detail!Z1", result["marker"])
