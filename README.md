@@ -45,3 +45,16 @@ python desktop.py --json batch.json submission1.xlsx submission2.xlsx
 ```
 
 For calibration, keep instructor benchmark workbooks locally. Create a JSON array of entries with `workbook` (a path relative to the JSON file), `scores` (an object keyed by the 25 exact rubric names from the CSV headers, without the point suffixes), and optional `notes`. Run `python desktop.py --benchmark benchmarks.json --json comparison.json`. The comparison records differences by item, instructor notes, and automatic evidence to guide rule changes and regression checks. It does not apply benchmark scores to unrelated submissions.
+
+
+## Brightspace read-only pilot
+
+This branch includes an experimental command-line importer for one assignment. It requires a sandbox Brightspace tenant, its LE API version, the numeric course and assignment folder IDs, and an instructor OAuth access token authorized to read assignment submissions and files. Have your Brightspace administrator confirm the supported version and access scopes. Supply the token locally through the `BRIGHTSPACE_ACCESS_TOKEN` environment variable.
+
+List Excel attachments first:
+
+```sh
+python brightspace.py --tenant https://your-tenant.example --api-version 1.82 --course-id 123 --assignment-id 456
+```
+
+Add `--download-dir` with the path to a new private directory outside the repository to download the Excel attachments, grade them locally, and write `grades.json`. The report keeps submission, attachment and submitter identifiers for future matching. This pilot uses only GET requests. It has been exercised with mocked responses and requires verification on a live test tenant.
